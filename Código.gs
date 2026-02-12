@@ -156,6 +156,7 @@ function correctDocx(fileId, settings) {
 
   // Abrir y aplicar reglas sobre CORREGIDO
   const doc = DocumentApp.openById(correctedGDoc.getId());
+  applyGeneralNormalizations_(doc, changeLog);
   applyGlobalStyle_(doc, changeLog);
   applyFirstParagraphRules_(doc, settings, changeLog);
   fixSecondParagraphAbiertoElActo_(doc, changeLog);
@@ -163,7 +164,6 @@ function correctDocx(fileId, settings) {
   formatQuestionHeadings_(doc, changeLog);
   applyVotersInSections_(doc, settings, changeLog);
   fixResuelve_(doc, changeLog);
-  applyGeneralNormalizations_(doc, changeLog);
 
   doc.saveAndClose();
   changeLog.push(makeChange_("DEBUG_STEP", "Fin", "", "3) Guardado OK", {}));
@@ -194,6 +194,18 @@ function correctDocx(fileId, settings) {
 
 
 
+}
+
+function forEachText_(element, fn) {
+  const type = element.getType();
+  if (type === DocumentApp.ElementType.TEXT) {
+    fn(element.asText());
+    return;
+  }
+  if (!element.getNumChildren) return;
+  for (let i = 0; i < element.getNumChildren(); i++) {
+    forEachText_(element.getChild(i), fn);
+  }
 }
 
 function applyGeneralNormalizations_(doc, log) {
@@ -289,15 +301,22 @@ function applyGeneralNormalizations_(doc, log) {
 
 
   // =========================
-  // F) Dentro de paréntesis: NO usar "del" (ej: (art. 12 CP))
+  // F) Dentro de paréntesis: NO usar "del/de la/de los/de las" antes de siglas
   // =========================
-  // Ejemplos: (art. 12 del CP) -> (art. 12 CP)
-  // (art. 12 de la CN) -> (art. 12 CN)
-  // Nota: solo toca cuando está dentro del mismo paréntesis antes de CP/CN/CPP/CSJN/TSJ
-  R("\\(([^)]*?)\\b(art\\.?\\s*\\d+[a-zA-Z0-9º°\\.\\-]*\\s+)(?:del|de la|de los|de las)\\s+(CP|CN|CPP|CSJN|TSJ)\\b", "($1$2$3");
+  forEachText_(body, (textEl) => {
+    const src = textEl.getText();
+    const out = src.replace(
+      /\(([^)]*?\bart\.?\s*\d+[^)]*?)\s+(del|de la|de los|de las)\s+(C\.?\s*P\.?\s*P\.?|C\.?\s*P\.?|C\.?\s*N\.?|C\.?\s*S\.?\s*J\.?\s*N\.?|T\.?\s*S\.?\s*J\.?)\s*\)/gi,
+      (_, a, __, sigla) => {
+        const norm = sigla.replace(/\./g, "").replace(/\s+/g, "").toUpperCase();
+        return `(${a.trim()} ${norm})`;
+      }
+    );
 
-  // Log (si querés)
-  if (log) log.push(makeChange_("GENERAL_NORMALIZATIONS", "Documento completo", "", "Aplicadas normalizaciones generales (Dr./Dra., n°, capitalización, siglas, Sala Penal, paréntesis).", {}));
+    if (out !== src) textEl.setText(out);
+  });
+
+  if (log) log.push(makeChange_("GENERAL_NORMALIZATIONS", "Documento completo", "", "Aplicadas normalizaciones generales (Dr./Dra., n°, capitalización, siglas, Sala Penal y paréntesis sin literales de captura).", {}));
 }
 
 
@@ -470,6 +489,16 @@ function elementToParagraphOrListItem_(el) {
 }
 
 // ====== PRIMER PÁRRAFO (APERTURA) ======
+
+function isFirstParagraphCanonical_(txt) {
+  const s = (txt || "").replace(/[	 ]/g, " ").replace(/\s+/g, " ").trim();
+  const hasCause = /emite\s+sentencia\s+en\s+la\s+causa/i.test(s);
+  const hasCaratulaQuotes = /["“”][^"“”]+["“”]/.test(s);
+  const hasSac = /\(\s*SAC\s+[^)]+\)/i.test(s);
+  const hasResolutionPhrase = /la\s+resoluci[oó]n\s+se\s+pronuncia/i.test(s);
+  return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase;
+}
+
 function applyFirstParagraphRules_(doc, settings, log) {
   const body = doc.getBody();
 
@@ -486,6 +515,11 @@ function applyFirstParagraphRules_(doc, settings, log) {
 
   let txt = p.getText() || "";
   const beforeAll = txt;
+
+  if (isFirstParagraphCanonical_(txt)) {
+    log.push(makeChange_("P1_RULES", where, beforeAll, "Sin cambios (encabezado canónico protegido).", {}));
+    return;
+  }
 
   log.push(makeChange_("DEBUG_APERTURA", where, txt, "", {}));
 
@@ -510,8 +544,9 @@ function applyFirstParagraphRules_(doc, settings, log) {
     /se constituy[oó].*audiencia pública.*Sala Penal/i.test(txt);
 
   const esTSJ = /Sala Penal del Tribunal Superior de Justicia/i.test(txt);
+  const esPlantillaCruda = /emitir[aá]\s+sentencia\s+en\s+los\s+autos/i.test(txt);
 
-  if (esModeloLargo || esTSJ) {
+  if (esModeloLargo || (esTSJ && esPlantillaCruda)) {
     let tail = "";
     const mTail = txt.match(/(emitirá sentencia[\s\S]*)/i);
     if (mTail) tail = mTail[1];
@@ -960,8 +995,9 @@ function applyVotersInSections_(doc, settings, log) {
           const newLine = `${g.art} ${g.senor} Vocal ${g.doc} ${desiredName} dijo:`;
 
           const before = vp.paragraph.getText() || "";
+          const esPlaceholder = voteLineRegexPlaceholder.test(before.trim());
 
-          if (norm(before) !== norm(newLine)) {
+          if (esPlaceholder && norm(before) !== norm(newLine)) {
             vp.paragraph.setText(newLine);
 
             vp.paragraph.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
@@ -995,7 +1031,7 @@ function applyVotersInSections_(doc, settings, log) {
             log.push(makeChange_(
               "VOTER_LINE_FORMAT",
               `Sección ${t} / Párrafo ${vp.index + 1}`,
-              "(texto igual normalizado)",
+              "(línea existente preservada)",
               "Aplicado negrita+subrayado y quitadas sangrías",
               { paragraphIndex: vp.index, voter: desiredName }
             ));

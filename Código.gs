@@ -546,6 +546,10 @@ function applyFirstParagraphRules_(doc, settings, log) {
   txt = txt.replace(/\ben contra del auto\b/gi, "en contra del Auto");
   txt = txt.replace(/\bcontra\s+la\s+sentencia\b/gi, "en contra de la Sentencia");
   txt = txt.replace(/\bcontra\s+el\s+auto\b/gi, "en contra del Auto");
+  txt = txt.replace(
+    /(La\s+resoluci[oó]n\s+se\s+pronuncia\s+con\s+motivo\s+del\s+recurso[\s\S]*?)\.\s*(La\s+impugnaci[oó]n\s+se\s+presenta\s+en\s+contra\s+de\s+(la\s+Sentencia|el\s+Auto))/i,
+    "$1, $2"
+  );
   txt = normalizeResolucionNumeroYFechaEnLetras_(txt);
   txt = normalizeEnContraStructure_(txt);
   txt = normalizeNominacionEnLetras_(txt);
@@ -595,7 +599,6 @@ function applyFirstParagraphRules_(doc, settings, log) {
     p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
     // FIX: sacar subrayado heredado del DOCX
     clearUnderline_(p);
-    boldAutosBetweenQuotes_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, nuevo, {}));
     return;
@@ -611,7 +614,6 @@ function applyFirstParagraphRules_(doc, settings, log) {
     p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
 
     clearUnderline_(p);
-    boldAutosBetweenQuotes_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, txt, {
       location: found.container === "BODY"

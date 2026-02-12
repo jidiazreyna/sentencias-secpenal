@@ -1307,6 +1307,9 @@ function boldAutosBetweenQuotes_(paragraph) {
   const full = paragraph.getText() || "";
   if (!full) return;
 
+  // Evita herencia de negrita en todo el párrafo: primero limpiamos formato bold.
+  t.setBold(0, full.length - 1, false);
+
   const pairs = [
     ['"', '"'],
     ['“', '”'],

@@ -490,13 +490,31 @@ function elementToParagraphOrListItem_(el) {
 
 // ====== PRIMER PÁRRAFO (APERTURA) ======
 
-function isFirstParagraphCanonical_(txt) {
+function isFirstParagraphCanonical_(txt, settings) {
   const s = (txt || "").replace(/[	 ]/g, " ").replace(/\s+/g, " ").trim();
   const hasCause = /emite\s+sentencia\s+en\s+la\s+causa/i.test(s);
   const hasCaratulaQuotes = /["“”][^"“”]+["“”]/.test(s);
   const hasSac = /\(\s*SAC\s+[^)]+\)/i.test(s);
   const hasResolutionPhrase = /la\s+resoluci[oó]n\s+se\s+pronuncia/i.test(s);
-  return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase;
+
+  // Solo protegemos el encabezado cuando, además de la estructura,
+  // coincide explícitamente la presidencia e integración elegidas.
+  if (!settings || !settings.presidente || !Array.isArray(settings.vocales)) {
+    return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase;
+  }
+
+  const presidente = settings.presidente;
+  const otros = settings.vocales.filter(v => v !== presidente);
+  if (otros.length !== 2) return false;
+
+  const presTit = vocalTitulo_(presidente).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const v2 = otros[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const v3 = otros[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const hasExpectedPresidency = new RegExp(`presidida\\s+por\\s+${presTit}`, "i").test(s);
+  const hasExpectedIntegration = new RegExp(`integrada\\s+por\\s+los\\s+señores\\s+Vocales\\s+doctores\\s+${v2}\\s+y\\s+${v3}`, "i").test(s);
+
+  return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase && hasExpectedPresidency && hasExpectedIntegration;
 }
 
 function applyFirstParagraphRules_(doc, settings, log) {
@@ -516,7 +534,7 @@ function applyFirstParagraphRules_(doc, settings, log) {
   let txt = p.getText() || "";
   const beforeAll = txt;
 
-  if (isFirstParagraphCanonical_(txt)) {
+  if (isFirstParagraphCanonical_(txt, settings)) {
     log.push(makeChange_("P1_RULES", where, beforeAll, "Sin cambios (encabezado canónico protegido).", {}));
     return;
   }

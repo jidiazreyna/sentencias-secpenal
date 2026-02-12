@@ -534,11 +534,6 @@ function applyFirstParagraphRules_(doc, settings, log) {
   let txt = p.getText() || "";
   const beforeAll = txt;
 
-  if (isFirstParagraphCanonical_(txt, settings)) {
-    log.push(makeChange_("P1_RULES", where, beforeAll, "Sin cambios (encabezado canónico protegido).", {}));
-    return;
-  }
-
   log.push(makeChange_("DEBUG_APERTURA", where, txt, "", {}));
 
   txt = txt.replace(/^En la\s+Ciudad\s+de\s+Córdoba\b\s*,?/i, "En la ciudad de Córdoba,");
@@ -549,6 +544,8 @@ function applyFirstParagraphRules_(doc, settings, log) {
   );
   txt = txt.replace(/\ben contra de la sentencia\b/gi, "en contra de la Sentencia");
   txt = txt.replace(/\ben contra del auto\b/gi, "en contra del Auto");
+  txt = txt.replace(/\bcontra\s+la\s+sentencia\b/gi, "en contra de la Sentencia");
+  txt = txt.replace(/\bcontra\s+el\s+auto\b/gi, "en contra del Auto");
   txt = normalizeResolucionNumeroYFechaEnLetras_(txt);
   txt = normalizeEnContraStructure_(txt);
   txt = normalizeNominacionEnLetras_(txt);

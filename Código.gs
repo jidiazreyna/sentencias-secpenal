@@ -116,6 +116,7 @@ function correctDocx(fileId, settings) {
   fixFirstQuestionIntroSentenciaI_(doc, changeLog);
   applyVotersInSections_(doc, settings, changeLog);
   fixResuelve_(doc, changeLog);
+  enforceTimes12WithoutSmallCaps_(doc, changeLog);
 
   doc.saveAndClose();
   changeLog.push(makeChange_("DEBUG_STEP", "Fin", "", "3) Guardado OK", {}));
@@ -1000,6 +1001,45 @@ function applyGlobalStyle_(doc, log) {
     "Documento completo",
     "",
     `Aplicado Times New Roman 12 + Justificado + 1,5 + sin espaciado + sin sangrías en ${countBody} párrafos del body (y también en tablas: ${countTables}).`,
+    {}
+  ));
+}
+
+function enforceTimes12WithoutSmallCaps_(doc, log) {
+  const attrs = {
+    [DocumentApp.Attribute.FONT_FAMILY]: "Times New Roman",
+    [DocumentApp.Attribute.FONT_SIZE]: 12
+  };
+
+  if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
+    attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
+  } else {
+    attrs.SMALL_CAPS = false;
+  }
+
+  let touchedRuns = 0;
+
+  const applyToContainer = (container) => {
+    if (!container) return;
+
+    forEachText_(container, (textEl) => {
+      const len = (textEl.getText() || "").length;
+      if (len <= 0) return;
+
+      textEl.setAttributes(0, len - 1, attrs);
+      touchedRuns++;
+    });
+  };
+
+  applyToContainer(doc.getBody());
+  applyToContainer(doc.getHeader());
+  applyToContainer(doc.getFooter());
+
+  log.push(makeChange_(
+    "STYLE_ENFORCE_TIMES12_NO_SMALLCAPS",
+    "Documento completo",
+    "",
+    `Forzado final de estilo en ${touchedRuns} runs: Times New Roman 12 y SMALL_CAPS=false.`,
     {}
   ));
 }

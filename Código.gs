@@ -1161,7 +1161,7 @@ function applyFirstParagraphRules_(doc, settings, log) {
     p.setLineSpacing(1.5);
     p.setSpacingBefore(0);
     p.setSpacingAfter(0);
-    p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
+    applyTextFont12Times_(p.editAsText());
     clearUnderline_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, nuevo, {}));
@@ -1183,7 +1183,7 @@ function applyFirstParagraphRules_(doc, settings, log) {
     p.setLineSpacing(1.5);
     p.setSpacingBefore(0);
     p.setSpacingAfter(0);
-    p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
+    applyTextFont12Times_(p.editAsText());
     clearUnderline_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, txt, {

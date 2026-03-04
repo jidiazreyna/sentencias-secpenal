@@ -368,9 +368,14 @@
 
         google.script.run
         .withSuccessHandler(res => {
+          const compareLink = res.comparisonDocUrl
+            ? `<p><a href="${res.comparisonDocUrl}" target="_blank">Comparación visual (Google Docs)</a></p>`
+            : "";
+
           document.getElementById("out").innerHTML = `
             <p><b>Listo</b></p>
             <p><a href="${res.correctedDocxUrl}" target="_blank">WORD corregido (DOCX)</a></p>
+            ${compareLink}
           `;
         })
 

@@ -928,15 +928,15 @@ function forceSmallCapsOffPreservingInline_(textEl) {
   const len = (textEl.getText() || "").length;
   if (len <= 0) return;
 
+  // Algunos entornos de DocumentApp no exponen SMALL_CAPS en Text attributes.
+  // Evitamos setAttributes con claves no soportadas porque dispara:
+  // "Unexpected error while getting the method or property setAttributes..."
+  if (!(DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS)) return;
+
   for (let i = 0; i < len; i++) {
     const attrs = textEl.getAttributes(i) || {};
 
-    if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
-      attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
-    } else {
-      attrs.SMALL_CAPS = false;
-    }
-
+    attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
     textEl.setAttributes(i, i, attrs);
   }
 }

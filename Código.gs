@@ -898,8 +898,11 @@ function validateSettings_(s) {
   s.vocales = [...s.ordenVotos];
 }
 
-function applyTextFont12Times_(textEl) {
+function applyTextFont12Times_(textEl, options) {
   if (!textEl) return;
+
+  const opts = options || {};
+  const clearInlineStyles = !!opts.clearInlineStyles;
 
   textEl.setFontFamily("Times New Roman");
   textEl.setFontSize(12);
@@ -907,9 +910,12 @@ function applyTextFont12Times_(textEl) {
   const len = (textEl.getText() || "").length;
   if (len <= 0) return;
 
-  textEl.setBold(0, len - 1, false);
-  textEl.setItalic(0, len - 1, false);
-  textEl.setUnderline(0, len - 1, false);
+  // Por defecto NO tocamos negrita/cursiva/subrayado para preservar formato del DOCX.
+  if (clearInlineStyles) {
+    textEl.setBold(0, len - 1, false);
+    textEl.setItalic(0, len - 1, false);
+    textEl.setUnderline(0, len - 1, false);
+  }
 
   // Evita que sobreviva formato heredado de DOCX (p. ej. versalitas/small caps)
   if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
@@ -1546,7 +1552,8 @@ function applyVotersInSections_(doc, settings, log) {
   const voteLineRegexPlaceholder =
     /^El\s*\/\s*La\s+(?:señor|senor)\s*\/\s*a\s+Vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
   // FIX #1: placeholders con puntos/guiones/espacios: "........ dijo:" / "— dijo:"
-  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃\s]{3,}|\.{2,})\s*dijo\s*:\s*$/i;
+  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃·…\s]{2,})\s*dijo\s*:\s*$/i;
+  const voteLineRegexDijoOnly = /^\s*dijo\s*:\s*$/i;
 
   const sectionRegex = /^A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N/i;
 
@@ -1581,7 +1588,7 @@ function applyVotersInSections_(doc, settings, log) {
         if (sectionRegex.test(t2)) break;
 
         // FIX: matchea normal o placeholder
-        if (voteLineRegexNormal.test(t2) || voteLineRegexPlaceholder.test(t2) || voteLineRegexDotsPlaceholder.test(t2)) {
+        if (voteLineRegexNormal.test(t2) || voteLineRegexPlaceholder.test(t2) || voteLineRegexDotsPlaceholder.test(t2) || voteLineRegexDijoOnly.test(t2)) {
           voteParas.push({ index: j, paragraph: p2, elementType: el2.getType(), text: t2 });
           if (voteParas.length === 3) break;
         }

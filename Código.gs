@@ -116,6 +116,7 @@ function correctDocx(fileId, settings) {
   fixFirstQuestionIntroSentenciaI_(doc, changeLog);
   applyVotersInSections_(doc, settings, changeLog);
   fixResuelve_(doc, changeLog);
+  enforceTimes12WithoutSmallCaps_(doc, changeLog);
 
   doc.saveAndClose();
   changeLog.push(makeChange_("DEBUG_STEP", "Fin", "", "3) Guardado OK", {}));
@@ -918,21 +919,26 @@ function applyTextFont12Times_(textEl, options) {
   }
 
   // Evita que sobreviva formato heredado de DOCX (p. ej. versalitas/small caps)
-  // Algunos DOCX convierten este atributo de forma inconsistente: lo forzamos junto
-  // con familia/tamaño para que impacte en todo el run aunque el atributo venga mezclado.
-  const attrs = {
-    [DocumentApp.Attribute.FONT_FAMILY]: "Times New Roman",
-    [DocumentApp.Attribute.FONT_SIZE]: 12
-  };
+  // sin pisar negritas/cursivas/subrayados ya presentes.
+  forceSmallCapsOffPreservingInline_(textEl);
+}
 
-  if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
-    attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
-  } else {
-    // Fallback defensivo por si el enum no está expuesto en alguna versión/runtime.
-    attrs.SMALL_CAPS = false;
+function forceSmallCapsOffPreservingInline_(textEl) {
+  if (!textEl) return;
+  const len = (textEl.getText() || "").length;
+  if (len <= 0) return;
+
+  for (let i = 0; i < len; i++) {
+    const attrs = textEl.getAttributes(i) || {};
+
+    if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
+      attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
+    } else {
+      attrs.SMALL_CAPS = false;
+    }
+
+    textEl.setAttributes(i, i, attrs);
   }
-
-  textEl.setAttributes(0, len - 1, attrs);
 }
 
 
@@ -1000,6 +1006,34 @@ function applyGlobalStyle_(doc, log) {
     "Documento completo",
     "",
     `Aplicado Times New Roman 12 + Justificado + 1,5 + sin espaciado + sin sangrías en ${countBody} párrafos del body (y también en tablas: ${countTables}).`,
+    {}
+  ));
+}
+
+function enforceTimes12WithoutSmallCaps_(doc, log) {
+  let touchedRuns = 0;
+
+  const applyToContainer = (container) => {
+    if (!container) return;
+
+    forEachText_(container, (textEl) => {
+      const len = (textEl.getText() || "").length;
+      if (len <= 0) return;
+
+      applyTextFont12Times_(textEl);
+      touchedRuns++;
+    });
+  };
+
+  applyToContainer(doc.getBody());
+  applyToContainer(doc.getHeader());
+  applyToContainer(doc.getFooter());
+
+  log.push(makeChange_(
+    "STYLE_ENFORCE_TIMES12_NO_SMALLCAPS",
+    "Documento completo",
+    "",
+    `Forzado final de estilo en ${touchedRuns} runs: Times New Roman 12 y SMALL_CAPS=false.`,
     {}
   ));
 }

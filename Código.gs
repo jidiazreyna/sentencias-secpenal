@@ -898,6 +898,27 @@ function validateSettings_(s) {
   s.vocales = [...s.ordenVotos];
 }
 
+function applyTextFont12Times_(textEl) {
+  if (!textEl) return;
+
+  textEl.setFontFamily("Times New Roman");
+  textEl.setFontSize(12);
+
+  const len = (textEl.getText() || "").length;
+  if (len <= 0) return;
+
+  textEl.setBold(0, len - 1, false);
+  textEl.setItalic(0, len - 1, false);
+  textEl.setUnderline(0, len - 1, false);
+
+  // Evita que sobreviva formato heredado de DOCX (p. ej. versalitas/small caps)
+  if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
+    textEl.setAttributes(0, len - 1, {
+      [DocumentApp.Attribute.SMALL_CAPS]: false
+    });
+  }
+}
+
 
 // ====== ESTILO GLOBAL ======
 function applyGlobalStyle_(doc, log) {
@@ -919,12 +940,7 @@ function applyGlobalStyle_(doc, log) {
     p.setSpacingAfter(0);
 
     const t = p.editAsText();
-    t.setFontFamily("Times New Roman");
-    t.setFontSize(12);
-
-    // FIX: limpiar subrayado heredado del DOCX convertido
-    const len = (p.getText() || "").length;
-    if (len > 0) t.setUnderline(0, len - 1, false);
+    applyTextFont12Times_(t);
 
 
     countBody++;
@@ -954,12 +970,7 @@ function applyGlobalStyle_(doc, log) {
           p.setSpacingAfter(0);
 
           const t = p.editAsText();
-          t.setFontFamily("Times New Roman");
-          t.setFontSize(12);
-
-          // FIX: limpiar subrayado heredado del DOCX convertido
-          const len = (p.getText() || "").length;
-          if (len > 0) t.setUnderline(0, len - 1, false);
+          applyTextFont12Times_(t);
 
 
           countTables++;
@@ -1535,7 +1546,7 @@ function applyVotersInSections_(doc, settings, log) {
   const voteLineRegexPlaceholder =
     /^El\s*\/\s*La\s+(?:señor|senor)\s*\/\s*a\s+Vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
   // FIX #1: placeholders con puntos/guiones/espacios: "........ dijo:" / "— dijo:"
-  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\s]{3,}|\.{2,})\s*dijo\s*:\s*$/i;
+  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃\s]{3,}|\.{2,})\s*dijo\s*:\s*$/i;
 
   const sectionRegex = /^A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N/i;
 
@@ -1599,9 +1610,8 @@ function applyVotersInSections_(doc, settings, log) {
             vp.paragraph.setLineSpacing(1.5);
             vp.paragraph.setSpacingBefore(0);
             vp.paragraph.setSpacingAfter(0);
-            vp.paragraph.editAsText().setFontFamily("Times New Roman").setFontSize(12);
-
             const txt = vp.paragraph.editAsText();
+            applyTextFont12Times_(txt);
             txt.setBold(true);
             txt.setUnderline(true);
 
@@ -1614,6 +1624,7 @@ function applyVotersInSections_(doc, settings, log) {
             removeAllIndents_(vp.paragraph, vp.elementType);
 
             const txt = vp.paragraph.editAsText();
+            applyTextFont12Times_(txt);
             txt.setBold(true);
             txt.setUnderline(true);
 

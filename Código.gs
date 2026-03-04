@@ -43,7 +43,7 @@ function listInputFiles() {
   return out;
 }
 
-// FIX #11: eliminado flujo de comparación/comentarios para acelerar proceso.
+// Comparación visual: se mantiene el DOCX corregido y se agrega un GDoc con marcas.
 
 function copyBodyToCellPreserveFormat_(srcBody, dstCell) {
   const n = srcBody.getNumChildren();
@@ -128,14 +128,139 @@ function correctDocx(fileId, settings) {
     stripExt_(inFile.getName()) + "_CORREGIDO"
   );
 
-  // FIX #11: sin documentos extras de comparación/comentarios.
+  let comparisonDocUrl = "";
+  try {
+    const comparisonDoc = buildComparisonDoc_(
+      baseGDoc.getId(),
+      correctedGDoc.getId(),
+      outFolder,
+      stripExt_(inFile.getName()) + "_COMPARACION",
+      changeLog
+    );
+    comparisonDocUrl = comparisonDoc.getUrl();
+  } catch (e) {
+    changeLog.push(makeChange_(
+      "COMPARISON_DOC_ERROR",
+      "Documento comparativo",
+      "",
+      `No se pudo generar comparación visual: ${String(e)}`,
+      {}
+    ));
+  }
+
   return {
-    correctedDocxUrl: correctedDocxFile.getUrl()
+    correctedDocxUrl: correctedDocxFile.getUrl(),
+    comparisonDocUrl: comparisonDocUrl
   };
 
 }
 
-// FIX #11: eliminado flujo de comentario/comparación en backend.
+function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log) {
+  const comparisonFile = runWithRateLimitRetry_("comparison_copy", () =>
+    DriveApp.getFileById(baseDocId).makeCopy(outName, outFolder)
+  );
+
+  const comparisonDoc = DocumentApp.openById(comparisonFile.getId());
+  const correctedDoc = DocumentApp.openById(correctedDocId);
+
+  const pairs = pairTextElementsForComparison_(comparisonDoc.getBody(), correctedDoc.getBody());
+  let touched = 0;
+
+  for (const pair of pairs) {
+    const leftText = pair.left;
+    const rightText = pair.right;
+    if (!leftText || !rightText) continue;
+
+    const sA = leftText.getText() || "";
+    const sB = rightText.getText() || "";
+
+    if (!sA || !sB) continue;
+    if (normForMatch_(sA) === normForMatch_(sB)) continue;
+
+    try {
+      touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
+    } catch (e) {
+      // continuar: la comparación es complementaria y no debe frenar el flujo principal.
+    }
+  }
+
+  comparisonDoc.saveAndClose();
+  correctedDoc.saveAndClose();
+
+  log && log.push(makeChange_(
+    "COMPARISON_DOC",
+    "Documento comparativo",
+    "",
+    `Generado comparativo con ${touched} fragmentos resaltados.`,
+    { comparisonDocId: comparisonFile.getId(), highlightedFragments: touched }
+  ));
+
+  return comparisonFile;
+}
+
+function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
+  const left = collectEditableTextElements_(bodyCompare);
+  const right = collectEditableTextElements_(bodyCorrected);
+
+  const out = [];
+  let j = 0;
+  const LOOKAHEAD = 4;
+
+  for (let i = 0; i < left.length; i++) {
+    if (j >= right.length) break;
+
+    const aText = left[i].getText() || "";
+    const aNorm = normForMatch_(aText);
+
+    let best = j;
+    let bestScore = -1;
+    const lim = Math.min(right.length - 1, j + LOOKAHEAD);
+
+    for (let k = j; k <= lim; k++) {
+      const bNorm = normForMatch_(right[k].getText() || "");
+      if (!bNorm) continue;
+      if (aNorm === bNorm) {
+        best = k;
+        bestScore = 1;
+        break;
+      }
+      const score = diceCoef_(aNorm, bNorm);
+      if (score > bestScore) {
+        bestScore = score;
+        best = k;
+      }
+    }
+
+    out.push({ left: left[i], right: right[best] });
+    j = best + 1;
+  }
+
+  return out;
+}
+
+function collectEditableTextElements_(body) {
+  const out = [];
+  const n = body.getNumChildren();
+  for (let i = 0; i < n; i++) {
+    const el = body.getChild(i);
+    if (!isTextualElement_(el)) continue;
+    const te = toEditableText_(el);
+    te && out.push(te);
+  }
+  return out;
+}
+
+function isTextualElement_(el) {
+  const t = el.getType();
+  return t === DocumentApp.ElementType.PARAGRAPH || t === DocumentApp.ElementType.LIST_ITEM;
+}
+
+function toEditableText_(el) {
+  const t = el.getType();
+  if (t === DocumentApp.ElementType.PARAGRAPH) return el.asParagraph().editAsText();
+  if (t === DocumentApp.ElementType.LIST_ITEM) return el.asListItem().editAsText();
+  return null;
+}
 
 function forEachText_(element, fn) {
   const type = element.getType();
@@ -855,14 +980,44 @@ function exportGoogleDocToDocx_(googleDocFileId, outFolder, outName) {
 }
 
 
+function runWithRateLimitRetry_(label, fn, maxAttempts) {
+  const attempts = maxAttempts || 5;
+  let lastErr = null;
+
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isRateLimitExceededError_(e) || i === attempts) throw e;
+      const waitMs = Math.min(16000, 500 * Math.pow(2, i - 1)) + Math.floor(Math.random() * 250);
+      Utilities.sleep(waitMs);
+    }
+  }
+
+  throw lastErr || new Error(`Fallo en ${label || "operación"}`);
+}
+
+function isRateLimitExceededError_(e) {
+  const msg = String(e || "").toLowerCase();
+  return msg.includes("user rate limit exceeded") ||
+    msg.includes("rate limit exceeded") ||
+    msg.includes("too many requests") ||
+    msg.includes("response code 429") ||
+    msg.includes("http 429");
+}
+
+
 
 // ====== CONVERSIÓN ESTABLE ======
 function convertDocxToGoogleDoc_(fileId, title, outFolder, log) {
   try {
-    const copied = Drive.Files.copy(
-      { title: title, mimeType: GDOC_MIME },
-      fileId,
-      { convert: true }
+    const copied = runWithRateLimitRetry_("convert_docx_to_gdoc", () =>
+      Drive.Files.copy(
+        { title: title, mimeType: GDOC_MIME },
+        fileId,
+        { convert: true }
+      )
     );
 
     if (copied.mimeType !== GDOC_MIME) {

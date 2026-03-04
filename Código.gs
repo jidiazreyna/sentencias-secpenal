@@ -43,51 +43,7 @@ function listInputFiles() {
   return out;
 }
 
-function createComparisonDoc2Cols_(outFolder, originalFile, originalDocId, correctedDocId) {
-  const cmp = DocumentApp.create(stripExt_(originalFile.getName()) + "_COMPARACION");
-  const body = cmp.getBody();
-
-  // Título simple (solo este en negrita)
-  const title = body.appendParagraph("COMPARACIÓN (Original vs Corregido)");
-  title.setBold(true);
-
-  body.appendParagraph("Archivo: " + originalFile.getName());
-  body.appendParagraph("");
-
-  // Tabla 2 columnas
-  const table = body.appendTable();
-  const header = table.appendTableRow();
-  header.appendTableCell("ANTES (Original)");
-  header.appendTableCell("DESPUÉS (Corregido)");
-
-  // estilo header
-  for (let c = 0; c < 2; c++) {
-    const cell = header.getCell(c);
-    cell.setBackgroundColor("#f1f5f9");
-    cell.getChild(0).asParagraph().setBold(true);
-  }
-
-  const row = table.appendTableRow();
-  const leftCell = row.appendTableCell("");
-  const rightCell = row.appendTableCell("");
-
-  // Limpio el párrafo vacío inicial que trae la celda
-  leftCell.removeChild(leftCell.getChild(0));
-  rightCell.removeChild(rightCell.getChild(0));
-
-  // Copiar contenido REAL con formato
-  const orig = DocumentApp.openById(originalDocId);
-  const corr = DocumentApp.openById(correctedDocId);
-
-  copyBodyToCellPreserveFormat_(orig.getBody(), leftCell);
-  copyBodyToCellPreserveFormat_(corr.getBody(), rightCell);
-
-  cmp.saveAndClose();
-
-  const cmpFile = DriveApp.getFileById(cmp.getId());
-  outFolder.addFile(cmpFile);
-  return cmpFile;
-}
+// FIX #11: eliminado flujo de comparación/comentarios para acelerar proceso.
 
 function copyBodyToCellPreserveFormat_(srcBody, dstCell) {
   const n = srcBody.getNumChildren();
@@ -141,16 +97,11 @@ function correctDocx(fileId, settings) {
     changeLog
   );
 
-  // ✅ COPIA ORIGINAL (intocable)
-  const originalGDoc = DriveApp.getFileById(baseGDoc.getId())
-    .makeCopy(stripExt_(inFile.getName()) + "_ORIGINAL", outFolder);
-
   // ✅ COPIA DE TRABAJO (la que corregimos)
   const correctedGDoc = DriveApp.getFileById(baseGDoc.getId())
     .makeCopy(stripExt_(inFile.getName()) + "_CORREGIDO", outFolder);
 
-  changeLog.push(makeChange_("DEBUG_STEP", "Copias", "", "2) Creado ORIGINAL y CORREGIDO", {
-    originalId: originalGDoc.getId(),
+  changeLog.push(makeChange_("DEBUG_STEP", "Copias", "", "2) Creado CORREGIDO", {
     correctedId: correctedGDoc.getId()
   }));
 
@@ -176,231 +127,14 @@ function correctDocx(fileId, settings) {
     stripExt_(inFile.getName()) + "_CORREGIDO"
   );
 
-  // ✅ ORIGINAL con comentarios (azul) mostrando TODOS los cambios
-  const comentadoGDocFile = createOriginalWithCommentsDoc_(
-    outFolder,
-    inFile,
-    originalGDoc.getId(),
-    correctedGDoc.getId()
-  );
-
-  // Exportar a DOCX
-  const comentadoDocxFile = exportGoogleDocToDocx_(
-    comentadoGDocFile.getId(),
-    outFolder,
-    stripExt_(inFile.getName()) + "_ORIGINAL_CON_COMENTARIOS"
-  );
-
+  // FIX #11: sin documentos extras de comparación/comentarios.
   return {
-    correctedDocxUrl: correctedDocxFile.getUrl(),
-    originalComentadoDocxUrl: comentadoDocxFile.getUrl()
+    correctedDocxUrl: correctedDocxFile.getUrl()
   };
 
 }
 
-function createOriginalWithCommentsDoc_(outFolder, originalFile, originalDocId, correctedDocId) {
-  // Copia del ORIGINAL (para anotarlo sin tocar el original real)
-  const annotatedFile = DriveApp.getFileById(originalDocId)
-    .makeCopy(stripExt_(originalFile.getName()) + "_ORIGINAL_CON_COMENTARIOS_GDoc", outFolder);
-
-  const doc = DocumentApp.openById(annotatedFile.getId());
-
-  // Comentario general al principio (SANGRÍAS primero, como pediste)
-  addGeneralHeaderComments_(doc);
-
-  // Comentarios debajo de cada párrafo cambiado
-  annotateDifferencesAsBlueComments_(doc, correctedDocId);
-
-  doc.saveAndClose();
-
-  shareAnyoneWithLinkView_(annotatedFile);
-  return annotatedFile;
-}
-
-function addGeneralHeaderComments_(doc) {
-  const body = doc.getBody();
-
-  const txt =
-    "COMENTARIOS GENERALES (aplican a todo el documento):\n" +
-    "1) Sangrías/tabulaciones: se unificó el criterio (sin sangría al inicio; tabs convertidos a espacios).\n" +
-    "2) Formato general: se unificó justificación/interlineado y se limpiaron subrayados heredados (solo quedan donde corresponde).\n" +
-    "3) Texto: se estandarizaron abreviaturas y referencias (Sr./Sra., Dr./Dra., Lic., n°, siglas CP/CPP/TSJ, etc.) y se ajustaron párrafos modelo (apertura, orden de votos y encabezados).\n" +
-    "Nota: debajo de cada párrafo con cambios se incluye el texto corregido final y, cuando corresponde, el cambio de formato (negrita/subrayado/cursiva).";
-
-  const p = body.insertParagraph(0, txt);
-  setBlueCommentStyle_(p);
-
-  // Línea en blanco para separar
-  body.insertParagraph(1, "");
-}
-
-function annotateDifferencesAsBlueComments_(annotatedDoc, correctedDocId) {
-  const bodyA = annotatedDoc.getBody();
-  const bodyC = DocumentApp.openById(correctedDocId).getBody();
-
-  const aBlocks = collectTextBlocks_(bodyA); // ya la tenés
-  const cBlocks = collectTextBlocks_(bodyC);
-
-  const anchors = buildAnchorMap_(cBlocks);        // ya la tenés
-  const cIndex  = buildNormalizedIndex_(cBlocks);  // ya la tenés
-
-  const usedC = {};
-
-  for (let i = 0; i < aBlocks.length; i++) {
-    const a = aBlocks[i];
-    const aText = a.text || "";
-    const aNorm = normalizeForMatch_(aText);
-
-    let j = -1;
-
-    // Match por anclas “fuertes” (evita errores)
-    if (/En la\s+(ciudad|Ciudad)\s+de\s+Córdoba/i.test(aText) && anchors.apertura !== -1) {
-      j = anchors.apertura;
-    } else if (/Las\s+cuestiones\s+a\s+resolver\s+son\s+las\s+siguientes/i.test(aText) && anchors.cuestiones !== -1) {
-      j = anchors.cuestiones;
-    } else if (/Los\s+señores\s+vocales\s+emitir[aá]n\s+sus\s+votos\s+en\s+el\s+siguiente\s+orden/i.test(aText) && anchors.votos !== -1) {
-      j = anchors.votos;
-    } else if (/^\s*RESUELVE\s*:/i.test(aText) && anchors.resuelve !== -1) {
-      j = anchors.resuelve;
-    } else {
-      j = findBestMatchIndex_(aNorm, cBlocks, cIndex, i); // ya la tenés
-    }
-
-    if (j === -1) continue;
-    usedC[j] = true;
-
-    const c = cBlocks[j];
-    const cText = c.text || "";
-
-    const textChanged = aText !== cText;
-
-    // Formato (negrita/subrayado/cursiva)
-    const fA = formatSignature_(a.el);
-    const fC = formatSignature_(c.el);
-    const fmtChanged = JSON.stringify(fA) !== JSON.stringify(fC);
-
-    if (!textChanged && !fmtChanged) continue;
-
-    const comment = buildBlueCommentText_(aText, cText, fA, fC);
-    insertBlueCommentAfterElement_(a.el, comment);
-  }
-
-  // Párrafos “agregados” en corregido que no matchearon con el original:
-  const extras = [];
-  for (let k = 0; k < cBlocks.length; k++) {
-    if (!usedC[k]) {
-      const t = (cBlocks[k].text || "").trim();
-      if (t) extras.push(t);
-    }
-  }
-
-  if (extras.length) {
-    const body = annotatedDoc.getBody();
-    const head = body.appendParagraph("Párrafos agregados en la corrección (no estaban en el original):");
-    setBlueCommentStyle_(head);
-
-    extras.forEach(tx => {
-      const p = body.appendParagraph("• " + tx);
-      setBlueCommentStyle_(p);
-    });
-  }
-}
-
-function buildBlueCommentText_(origText, corrText, fO, fC) {
-  const lines = [];
-  lines.push("COMENTARIO (cambios aplicados en la corrección):");
-
-  if (origText !== corrText) {
-    if (origText.trim() === corrText.trim()) {
-      lines.push("• Se normalizaron espacios/tabulaciones (sin cambiar el contenido).");
-    } else {
-      lines.push("• Texto corregido (versión final):");
-      lines.push(corrText);
-    }
-  }
-
-  const fmtMsg = describeFormatChange_(fO, fC);
-  if (fmtMsg.length) {
-    lines.push("• Formato:");
-    fmtMsg.forEach(m => lines.push("  - " + m));
-  }
-
-  return lines.join("\n");
-}
-
-function describeFormatChange_(a, b) {
-  const out = [];
-  if (a.anyBold !== b.anyBold || a.allBold !== b.allBold) {
-    if (b.allBold) out.push("se dejó todo el párrafo en negrita");
-    else if (!a.anyBold && b.anyBold) out.push("se agregó negrita a una parte del párrafo");
-    else if (a.anyBold && !b.anyBold) out.push("se quitó la negrita");
-  }
-  if (a.anyUnderline !== b.anyUnderline || a.allUnderline !== b.allUnderline) {
-    if (b.allUnderline) out.push("se dejó todo el párrafo subrayado");
-    else if (!a.anyUnderline && b.anyUnderline) out.push("se agregó subrayado a una parte del párrafo");
-    else if (a.anyUnderline && !b.anyUnderline) out.push("se quitó el subrayado");
-  }
-  if (a.anyItalic !== b.anyItalic || a.allItalic !== b.allItalic) {
-    if (b.allItalic) out.push("se dejó todo el párrafo en cursiva");
-    else if (!a.anyItalic && b.anyItalic) out.push("se agregó cursiva (p. ej., texto entre comillas)");
-    else if (a.anyItalic && !b.anyItalic) out.push("se quitó la cursiva");
-  }
-  return out;
-}
-
-function formatSignature_(paragraphOrListItem) {
-  const t = paragraphOrListItem.editAsText();
-  const s = t.getText() || "";
-
-  if (!s) {
-    return { anyBold:false, allBold:false, anyUnderline:false, allUnderline:false, anyItalic:false, allItalic:false };
-  }
-
-  let anyBold = false, anyUnderline = false, anyItalic = false;
-  let allBold = true, allUnderline = true, allItalic = true;
-
-  for (let i = 0; i < s.length; i++) {
-    const a = t.getAttributes(i) || {};
-    const b = (a.BOLD === true);
-    const u = (a.UNDERLINE === true);
-    const it = (a.ITALIC === true);
-
-    anyBold = anyBold || b;
-    anyUnderline = anyUnderline || u;
-    anyItalic = anyItalic || it;
-
-    allBold = allBold && b;
-    allUnderline = allUnderline && u;
-    allItalic = allItalic && it;
-  }
-
-  return { anyBold, allBold, anyUnderline, allUnderline, anyItalic, allItalic };
-}
-
-function insertBlueCommentAfterElement_(paragraphOrListItem, commentText) {
-  const parent = paragraphOrListItem.getParent();
-  const idx = parent.getChildIndex(paragraphOrListItem);
-
-  const p = parent.insertParagraph(idx + 1, commentText);
-  setBlueCommentStyle_(p);
-  return p;
-}
-
-function setBlueCommentStyle_(p) {
-  try {
-    p.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
-    p.setSpacingBefore(0);
-    p.setSpacingAfter(6);
-
-    const t = p.editAsText();
-    t.setForegroundColor("#0000FF");
-    t.setFontFamily("Times New Roman");
-    t.setFontSize(11);
-    t.setBold(false);
-    t.setUnderline(false);
-    // cursiva no hace falta, lo dejamos normal
-  } catch (e) {}
-}
+// FIX #11: eliminado flujo de comentario/comparación en backend.
 
 function forEachText_(element, fn) {
   const type = element.getType();
@@ -412,6 +146,24 @@ function forEachText_(element, fn) {
   for (let i = 0; i < element.getNumChildren(); i++) {
     forEachText_(element.getChild(i), fn);
   }
+}
+
+function forEachTextWithDepth_(element, fn, depth) {
+  const type = element.getType();
+  depth = depth || 0;
+  if (type === DocumentApp.ElementType.TEXT) {
+    const textEl = element.asText();
+    const txt = textEl.getText() || "";
+    const depthArr = buildParenDepthArray_(txt, depth);
+    fn(textEl, depthArr);
+    return depthArr[depthArr.length - 1];
+  }
+  if (!element.getNumChildren) return depth;
+  let d = depth;
+  for (let i = 0; i < element.getNumChildren(); i++) {
+    d = forEachTextWithDepth_(element.getChild(i), fn, d);
+  }
+  return d;
 }
 
 function applyGeneralNormalizations_(doc, log) {
@@ -435,10 +187,8 @@ function applyGeneralNormalizations_(doc, log) {
   // =========================
   // A) Dr./Dra. -> doctor/doctora (y plurales)
   // =========================
-  R("\\b[Dd]r\\.?\\b", "doctor");
-  R("\\b[Dd]ra\\.?\\b", "doctora");
-  R("\\b[Dd]rs\\.?\\b", "doctores");
-  R("\\b[Dd]ras\\.?\\b", "doctoras");
+  // FIX #8: conversión robusta sin dejar "doctor." colgando.
+  const cDr = normalizeDoctorTitles_(doc);
 
   R("\\bDoctor\\b", "doctor");
   R("\\bDoctora\\b", "doctora");
@@ -491,6 +241,20 @@ function applyGeneralNormalizations_(doc, log) {
 
   R("\\bC\\s*\\.\\s*P\\s*\\.\\s*P\\s*\\.", "CPP");
   R("\\bC\\s*\\.\\s*P\\s*\\.\\s*P\\b", "CPP");
+  // FIX #9: quitar punto residual de CPP.
+  R("\\bCPP\\.", "CPP");
+
+  // FIX #6: TSJ Córdoba/de Córdoba/de la Provincia de Córdoba -> TSJ.
+  const cTSJ = normalizeTSJCordoba_(doc);
+
+  // FIX #4: A./S. no X -> A./S. n° X
+  const cANo = normalizeANoNumero_(doc);
+
+  // FIX #5: Ley 456 -> Ley n° 456
+  const cLey = normalizeLeyNumero_(doc);
+
+  // FIX #7: Fiscal sólo mayúscula en "Fiscal General".
+  const cFiscal = normalizeFiscalCase_(doc);
 
   // =========================
   // F) Artículos del/de la + siglas CP/CPP/CN/CSJN/TSJ
@@ -513,6 +277,10 @@ function applyGeneralNormalizations_(doc, log) {
   const cOrd = normalizeOrdinalesAbreviados_(doc);
   const cTri = normalizeTribunalCase_(doc);
   const cVoc = normalizeVocalConditional_(doc);
+  // FIX #2 y #3: latinismos en cursiva + vgr/vrg -> v. gr.
+  const cLat = italicizeLatinisms_(doc);
+  // FIX #14: preservar formato "(SAC ####)" sin "n°".
+  const cSAC = normalizeSACOpening_(doc);
 
   // =========================
   // LOGS
@@ -530,10 +298,23 @@ function applyGeneralNormalizations_(doc, log) {
       "NEW_NORMALIZATIONS",
       "Documento completo",
       "",
-      `Aplicadas: decimoComp=${cDec || 0}, MP=${cMP || 0}, ordinales=${cOrd || 0}, tribunal=${cTri || 0}, vocal=${cVoc || 0}, sr/sra=${cSr||0}; lic=${cLic||0}.`,
+      `Aplicadas: decimoComp=${cDec || 0}, MP=${cMP || 0}, ordinales=${cOrd || 0}, tribunal=${cTri || 0}, vocal=${cVoc || 0}, sr/sra=${cSr||0}; lic=${cLic||0}; dr=${cDr||0}; TSJ=${cTSJ||0}; A/S no=${cANo||0}; Ley=${cLey||0}; fiscal=${cFiscal||0}; latin=${cLat||0}; SAC=${cSAC||0}.`,
       {}
     ));
   }
+}
+
+function normalizeDoctorTitles_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const DELIM = "(\\s|$|[\\.,;:!\\?\\)\\]\\u00BB\\u201D])";
+  const rules = [
+    [new RegExp("\\bDras?\\.?" + DELIM, "ig"), (m) => (/^dras/i.test(m[0]) ? `doctoras${m[1]||""}` : `doctora${m[1]||""}`)],
+    [new RegExp("\\bDrs\\.?" + DELIM, "ig"), (m) => `doctores${m[1]||""}`],
+    [new RegExp("\\bDr\\.?" + DELIM, "ig"), (m) => `doctor${m[1]||""}`]
+  ];
+  forEachText_(body, (textEl) => rules.forEach(([re, fn]) => touched += replaceInTextPreserveStyle_(textEl, re, fn)));
+  return touched;
 }
 
 
@@ -574,6 +355,48 @@ function replaceInTextPreserveStyle_(textEl, regex, makeReplacement) {
   }
 
   return matches.length;
+}
+
+function italicizeLatinisms_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  // FIX #2: vgr/vrg -> v. gr. (en cursiva)
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, /\b(?:vgr|vrg)\b/ig, "v. gr.");
+  });
+
+  // FIX #2 y #3: latinismos/locuciones en cursiva preservando formato existente.
+  const terms = [
+    "v\\.\\s*gr\\.", "in\\s+re", "in\\s+dubio\\s+pro\\s+reo", "bis", "ter", "quater", "quinquies", "sexies", "septies", "octies", "novies", "nonies", "decies",
+    "a\\s+quo", "ad\\s+quem", "onus\\s+probandi", "res\\s+iudicata", "habeas\\s+corpus", "ex\\s+lege", "dura\\s+lex", "sed\\s+lex",
+    "non\\s+bis\\s+in\\s+idem", "ad\\s+effectum\\s+videndi", "sine\\s+qua\\s+non", "prima\\s+facie", "ut\\s+supra", "supra", "modus\\s+operandi", "animus\\s+domini", "animus", "ad\\s+hoc"
+  ];
+
+  const rx = new RegExp("\\b(?:" + terms.join("|") + ")\\b", "ig");
+  forEachText_(body, (textEl) => {
+    const s = textEl.getText() || "";
+    if (!s) return;
+    const matches = [];
+    let m;
+    rx.lastIndex = 0;
+    while ((m = rx.exec(s)) !== null) {
+      matches.push({ start: m.index, end: m.index + m[0].length - 1 });
+      if (rx.lastIndex === m.index) rx.lastIndex++;
+    }
+    for (const it of matches) {
+      let allItalic = true;
+      for (let i = it.start; i <= it.end; i++) {
+        const a = textEl.getAttributes(i) || {};
+        if (a.ITALIC !== true) { allItalic = false; break; }
+      }
+      if (!allItalic) {
+        try { textEl.setItalic(it.start, it.end, true); touched++; } catch (e) {}
+      }
+    }
+  });
+
+  return touched;
 }
 
 function normalizeDecimoCompuestos_(doc) {
@@ -621,6 +444,7 @@ function normalizeMinisterioPublico_(doc) {
 
   const reDef = /\bministerio\s+p[uú]blico\s+de\s+la\s+defensa\b/ig;
   const reMPF = /\bministerio\s+p[uú]blico\s+fiscal\b/ig;
+  const reMPFF = /\bministerio\s+p[uú]blico\s+fiscal\s+fiscal\b/ig;
   const reMP  = /\bministerio\s+p[uú]blico\b/ig;
 
   forEachText_(body, (textEl) => {
@@ -629,6 +453,8 @@ function normalizeMinisterioPublico_(doc) {
 
     // 2) MP Fiscal explícito
     touched += replaceInTextPreserveStyle_(textEl, reMPF, "Ministerio Público Fiscal");
+    // FIX #13: evita duplicación "Fiscal Fiscal".
+    touched += replaceInTextPreserveStyle_(textEl, reMPFF, "Ministerio Público Fiscal");
 
     // 3) “Ministerio Público” suelto -> Fiscal, salvo que en el texto inmediato diga “de la Defensa”
     touched += replaceInTextPreserveStyle_(textEl, reMP, (m, full) => {
@@ -639,6 +465,55 @@ function normalizeMinisterioPublico_(doc) {
     });
   });
 
+  return touched;
+}
+
+function normalizeTSJCordoba_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const rules = [
+    /\bTSJ\s+de\s+la\s+Provincia\s+de\s+C[óo]rdoba\b/ig,
+    /\bTSJ\s+de\s+C[óo]rdoba\b/ig,
+    /\bTSJ\s+C[óo]rdoba\b/ig
+  ];
+  forEachText_(body, (textEl) => rules.forEach((re) => touched += replaceInTextPreserveStyle_(textEl, re, "TSJ")));
+  return touched;
+}
+
+function normalizeANoNumero_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const re = /\b([AS]\.)\s*(?:n[°º]?|no|nro)\.?\s*(\d+)\b/ig;
+  forEachText_(body, (textEl) => touched += replaceInTextPreserveStyle_(textEl, re, (m) => `${m[1]} n° ${m[2]}`));
+  return touched;
+}
+
+function normalizeLeyNumero_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const re = /\b[Ll]ey\s+(\d+)\b/g;
+  forEachText_(body, (textEl) => touched += replaceInTextPreserveStyle_(textEl, re, (m) => `Ley n° ${m[1]}`));
+  return touched;
+}
+
+function normalizeFiscalCase_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const re = /\bFiscal\b/g;
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, re, (m, full) => {
+      const tail = (full || "").slice(m.index, m.index + 30);
+      return /^Fiscal\s+General\b/.test(tail) ? "Fiscal" : "fiscal";
+    });
+  });
+  return touched;
+}
+
+function normalizeSACOpening_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const re = /\(\s*SAC\s+n\s*[°º]\s*(\d+)\s*\)/ig;
+  forEachText_(body, (textEl) => touched += replaceInTextPreserveStyle_(textEl, re, (m) => `(SAC ${m[1]})`));
   return touched;
 }
 
@@ -903,7 +778,8 @@ function normalizeArticlesOutsideParens_(doc) {
 
   let touched = 0;
 
-  forEachText_(body, (textEl) => {
+  // FIX #10: usa profundidad de paréntesis acumulada para evitar tocar texto dentro de paréntesis entre runs.
+  forEachTextWithDepth_(body, (textEl, depthArr) => {
     const src = textEl.getText() || "";
     if (!src) return;
 
@@ -915,7 +791,7 @@ function normalizeArticlesOutsideParens_(doc) {
 
       // ¿Este match cae dentro de paréntesis? (usamos el índice del match dentro del string del run)
       const idx = m.index;
-      if (isInsideParens_(full, idx)) return matchText; // no tocar
+      if (isInsideParens_(full, idx) || (depthArr[idx] || 0) > 0) return matchText; // no tocar
 
       const desired = articleForSigla_(sigla); // "del" o "de la"
 
@@ -931,7 +807,7 @@ function normalizeArticlesOutsideParens_(doc) {
 
       return matchText; // ya estaba bien
     });
-  });
+  }, 0);
 
   return touched;
 }
@@ -1658,6 +1534,8 @@ function applyVotersInSections_(doc, settings, log) {
   // Caso plantilla con placeholders (robusto)
   const voteLineRegexPlaceholder =
     /^El\s*\/\s*La\s+(?:señor|senor)\s*\/\s*a\s+Vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
+  // FIX #1: placeholders con puntos/guiones/espacios: "........ dijo:" / "— dijo:"
+  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\s]{3,}|\.{2,})\s*dijo\s*:\s*$/i;
 
   const sectionRegex = /^A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N/i;
 
@@ -1692,7 +1570,7 @@ function applyVotersInSections_(doc, settings, log) {
         if (sectionRegex.test(t2)) break;
 
         // FIX: matchea normal o placeholder
-        if (voteLineRegexNormal.test(t2) || voteLineRegexPlaceholder.test(t2)) {
+        if (voteLineRegexNormal.test(t2) || voteLineRegexPlaceholder.test(t2) || voteLineRegexDotsPlaceholder.test(t2)) {
           voteParas.push({ index: j, paragraph: p2, elementType: el2.getType(), text: t2 });
           if (voteParas.length === 3) break;
         }
@@ -2003,24 +1881,24 @@ function boldAutosBetweenQuotes_(paragraph) {
   // Evita herencia de negrita en todo el párrafo: primero limpiamos formato bold.
   t.setBold(0, full.length - 1, false);
 
-  const pairs = [
-    ['"', '"'],
-    ['“', '”'],
-    ['«', '»']
-  ];
-
-  for (const [openQ, closeQ] of pairs) {
-    const i1 = full.indexOf(openQ);
-    if (i1 === -1) continue;
-
-    const i2 = full.indexOf(closeQ, i1 + 1);
-    if (i2 === -1) continue;
-
-    const start = i1 + 1;
-    const end = i2 - 1;
-    if (end >= start) t.setBold(start, end, true);
-    return; // aplica sobre la primera pareja encontrada y sale
+  // FIX #15: soporta comillas de apertura/cierre mezcladas.
+  const openSet = ['"', '“', '«'];
+  const closeSet = ['"', '”', '»'];
+  let i1 = -1;
+  for (let i = 0; i < full.length; i++) {
+    if (openSet.indexOf(full[i]) !== -1) { i1 = i; break; }
   }
+  if (i1 === -1) return;
+
+  let i2 = -1;
+  for (let j = i1 + 1; j < full.length; j++) {
+    if (closeSet.indexOf(full[j]) !== -1) { i2 = j; break; }
+  }
+  if (i2 === -1) return;
+
+  const start = i1 + 1;
+  const end = i2 - 1;
+  if (end >= start) t.setBold(start, end, true);
 }
 
 
@@ -2104,7 +1982,14 @@ function numberToWordsEs_(n) {
 
   if (n < 10) return u[n];
   if (n < 20) return d10[n - 10];
-  if (n < 30) return (n === 20) ? "veinte" : ("veinti" + u[n - 20]);
+  if (n < 30) {
+    // FIX #12: asegura tildes correctas en veintidós/veintitrés/veintiséis.
+    const map20 = {
+      21: "veintiuno", 22: "veintidós", 23: "veintitrés", 24: "veinticuatro", 25: "veinticinco",
+      26: "veintiséis", 27: "veintisiete", 28: "veintiocho", 29: "veintinueve"
+    };
+    return (n === 20) ? "veinte" : map20[n];
+  }
   if (n < 100) {
     const t = Math.floor(n / 10);
     const r = n % 10;
@@ -2783,70 +2668,7 @@ function mergeOps_(ops) {
 
 
 // ====== REPORTE ======
-function createComparisonDoc_(outFolder, originalFile, correctedGoogleDocFile, changeLog, driveMeta) {
-  const cmp = DocumentApp.create(stripExt_(originalFile.getName()) + "_COMPARACION");
-  const body = cmp.getBody();
-
-  body.appendParagraph("COMPARACIÓN (Original vs Corregido)").setBold(true);
-  body.appendParagraph("Archivo original: " + originalFile.getName());
-  body.appendParagraph("Documento corregido (Google Doc): " + correctedGoogleDocFile.getUrl());
-  body.appendParagraph("Fecha: " + new Date().toLocaleString());
-  body.appendParagraph("MIME (Drive API): " + (driveMeta ? driveMeta.mimeType : "N/D"));
-  body.appendParagraph("");
-
-  // Filtramos cambios “útiles” (evita ruido)
-  const rows = (changeLog || []).filter(ch => {
-    if (!ch || !ch.ruleId) return false;
-    if (String(ch.ruleId).startsWith("DEBUG")) return false;
-    if (ch.ruleId === "STYLE_GLOBAL") return false; // muy ruidoso
-    return true;
-  });
-
-  body.appendParagraph(`Cambios detectados: ${rows.length}`).setBold(true);
-  body.appendParagraph("");
-
-  const table = body.appendTable();
-  const header = table.appendTableRow();
-  header.appendTableCell("Original");
-  header.appendTableCell("Corregido");
-  header.appendTableCell("Comentario");
-
-  // estilo header
-  for (let c = 0; c < 3; c++) {
-    const cell = header.getCell(c);
-    cell.setBackgroundColor("#f1f5f9"); // gris suave
-    cell.getChild(0).asParagraph().setBold(true);
-  }
-
-  rows.forEach(ch => {
-    const row = table.appendTableRow();
-
-    const c1 = row.appendTableCell(ch.beforeText || "");
-    const c2 = row.appendTableCell(ch.afterText || "");
-    const c3 = row.appendTableCell(formatComment_(ch));
-
-    // Sombreado suave para leer rápido
-    c1.setBackgroundColor("#fff7ed"); // naranja suave (antes)
-    c2.setBackgroundColor("#ecfdf5"); // verde suave (después)
-
-    // Tipografía legible
-    [c1, c2, c3].forEach(cell => {
-      const p = cell.getChild(0).asParagraph();
-      p.setFontFamily("Times New Roman");
-      p.setFontSize(11);
-      p.setSpacingAfter(6);
-    });
-
-    // Si querés que el “Corregido” tenga negrita en la primera línea cuando es etiqueta (RESUELVE:, etc.)
-    // lo podemos agregar luego, pero por ahora simple y robusto.
-  });
-
-  cmp.saveAndClose();
-
-  const cmpFile = DriveApp.getFileById(cmp.getId());
-  outFolder.addFile(cmpFile);
-  return cmpFile;
-}
+// FIX #11: eliminado reporte de comparación.
 
 function formatComment_(ch) {
   const rule = ch.ruleId || "REGLA";

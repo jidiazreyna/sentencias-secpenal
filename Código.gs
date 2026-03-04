@@ -918,11 +918,21 @@ function applyTextFont12Times_(textEl, options) {
   }
 
   // Evita que sobreviva formato heredado de DOCX (p. ej. versalitas/small caps)
+  // Algunos DOCX convierten este atributo de forma inconsistente: lo forzamos junto
+  // con familia/tamaño para que impacte en todo el run aunque el atributo venga mezclado.
+  const attrs = {
+    [DocumentApp.Attribute.FONT_FAMILY]: "Times New Roman",
+    [DocumentApp.Attribute.FONT_SIZE]: 12
+  };
+
   if (DocumentApp.Attribute && DocumentApp.Attribute.SMALL_CAPS) {
-    textEl.setAttributes(0, len - 1, {
-      [DocumentApp.Attribute.SMALL_CAPS]: false
-    });
+    attrs[DocumentApp.Attribute.SMALL_CAPS] = false;
+  } else {
+    // Fallback defensivo por si el enum no está expuesto en alguna versión/runtime.
+    attrs.SMALL_CAPS = false;
   }
+
+  textEl.setAttributes(0, len - 1, attrs);
 }
 
 

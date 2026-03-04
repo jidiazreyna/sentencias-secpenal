@@ -167,16 +167,32 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
   for (const pair of pairs) {
     const leftText = pair.left;
     const rightText = pair.right;
-    if (!leftText || !rightText) continue;
+    if (!leftText) continue;
 
     const sA = leftText.getText() || "";
-    const sB = rightText.getText() || "";
+    if (!sA) continue;
 
-    if (!sA || !sB) continue;
+    // Si no hubo match razonable en el documento corregido, resaltar párrafo completo.
+    if (!rightText) {
+      touched += markWholeTextAsChanged_(leftText, sA);
+      continue;
+    }
+
+    const sB = rightText.getText() || "";
+    if (!sB) {
+      touched += markWholeTextAsChanged_(leftText, sA);
+      continue;
+    }
+
     if (normForMatch_(sA) === normForMatch_(sB)) continue;
 
     try {
-      touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
+      // Si el emparejamiento fue débil, resaltar completo evita “ruido” palabra por palabra.
+      if ((pair.score || 0) < 0.35) {
+        touched += markWholeTextAsChanged_(leftText, sA);
+      } else {
+        touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
+      }
     } catch (e) {
       // continuar: la comparación es complementaria y no debe frenar el flujo principal.
     }
@@ -202,26 +218,37 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
 
   const out = [];
   let j = 0;
-  const LOOKAHEAD = 4;
+  const LOOKAHEAD = 12;
+  const MIN_MATCH_SCORE = 0.52;
 
   for (let i = 0; i < left.length; i++) {
-    if (j >= right.length) break;
+    const leftText = left[i];
+    const aNorm = normForMatch_(leftText.getText() || "");
 
-    const aText = left[i].getText() || "";
-    const aNorm = normForMatch_(aText);
+    if (!aNorm) {
+      out.push({ left: leftText, right: null, score: 0 });
+      continue;
+    }
 
-    let best = j;
+    if (j >= right.length) {
+      out.push({ left: leftText, right: null, score: 0 });
+      continue;
+    }
+
+    let best = -1;
     let bestScore = -1;
     const lim = Math.min(right.length - 1, j + LOOKAHEAD);
 
     for (let k = j; k <= lim; k++) {
       const bNorm = normForMatch_(right[k].getText() || "");
       if (!bNorm) continue;
+
       if (aNorm === bNorm) {
         best = k;
         bestScore = 1;
         break;
       }
+
       const score = diceCoef_(aNorm, bNorm);
       if (score > bestScore) {
         bestScore = score;
@@ -229,7 +256,13 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
       }
     }
 
-    out.push({ left: left[i], right: right[best] });
+    if (best === -1 || bestScore < MIN_MATCH_SCORE) {
+      // No avanzamos j: el siguiente párrafo de base podría emparejar mejor con el mismo derecho.
+      out.push({ left: leftText, right: null, score: bestScore < 0 ? 0 : bestScore });
+      continue;
+    }
+
+    out.push({ left: leftText, right: right[best], score: bestScore });
     j = best + 1;
   }
 
@@ -2702,6 +2735,18 @@ function collectFromElement_(el, out) {
     return;
   }
   // otros: ignorar
+}
+
+
+function markWholeTextAsChanged_(textEl, s) {
+  const RED = "#ffd6d6";
+  if (!s || !s.trim()) return 0;
+  try {
+    textEl.setBackgroundColor(0, s.length - 1, RED);
+    return 1;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {

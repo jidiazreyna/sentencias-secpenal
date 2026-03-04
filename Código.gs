@@ -162,6 +162,7 @@ function correctDocx(fileId, settings) {
   fixSecondParagraphAbiertoElActo_(doc, changeLog);
   applyVotesLine_(doc, settings, changeLog);
   formatQuestionHeadings_(doc, changeLog);
+  fixFirstQuestionIntroSentenciaI_(doc, changeLog);
   applyVotersInSections_(doc, settings, changeLog);
   fixResuelve_(doc, changeLog);
 
@@ -175,25 +176,230 @@ function correctDocx(fileId, settings) {
     stripExt_(inFile.getName()) + "_CORREGIDO"
   );
 
-  // ✅ Comparación: REPORTE de cambios (mucho más legible)
-  const cmpFile = createComparisonDoc_(outFolder, inFile, correctedGDoc, changeLog, meta);
-  shareAnyoneWithLinkView_(cmpFile);
-
-  // ✅ Word comparación
-  const comparacionDocxFile = exportGoogleDocToDocx_(
-    cmpFile.getId(),
+  // ✅ ORIGINAL con comentarios (azul) mostrando TODOS los cambios
+  const comentadoGDocFile = createOriginalWithCommentsDoc_(
     outFolder,
-    stripExt_(inFile.getName()) + "_COMPARACION"
+    inFile,
+    originalGDoc.getId(),
+    correctedGDoc.getId()
   );
 
+  // Exportar a DOCX
+  const comentadoDocxFile = exportGoogleDocToDocx_(
+    comentadoGDocFile.getId(),
+    outFolder,
+    stripExt_(inFile.getName()) + "_ORIGINAL_CON_COMENTARIOS"
+  );
 
   return {
     correctedDocxUrl: correctedDocxFile.getUrl(),
-    comparacionDocxUrl: comparacionDocxFile.getUrl()
+    originalComentadoDocxUrl: comentadoDocxFile.getUrl()
   };
 
+}
 
+function createOriginalWithCommentsDoc_(outFolder, originalFile, originalDocId, correctedDocId) {
+  // Copia del ORIGINAL (para anotarlo sin tocar el original real)
+  const annotatedFile = DriveApp.getFileById(originalDocId)
+    .makeCopy(stripExt_(originalFile.getName()) + "_ORIGINAL_CON_COMENTARIOS_GDoc", outFolder);
 
+  const doc = DocumentApp.openById(annotatedFile.getId());
+
+  // Comentario general al principio (SANGRÍAS primero, como pediste)
+  addGeneralHeaderComments_(doc);
+
+  // Comentarios debajo de cada párrafo cambiado
+  annotateDifferencesAsBlueComments_(doc, correctedDocId);
+
+  doc.saveAndClose();
+
+  shareAnyoneWithLinkView_(annotatedFile);
+  return annotatedFile;
+}
+
+function addGeneralHeaderComments_(doc) {
+  const body = doc.getBody();
+
+  const txt =
+    "COMENTARIOS GENERALES (aplican a todo el documento):\n" +
+    "1) Sangrías/tabulaciones: se unificó el criterio (sin sangría al inicio; tabs convertidos a espacios).\n" +
+    "2) Formato general: se unificó justificación/interlineado y se limpiaron subrayados heredados (solo quedan donde corresponde).\n" +
+    "3) Texto: se estandarizaron abreviaturas y referencias (Sr./Sra., Dr./Dra., Lic., n°, siglas CP/CPP/TSJ, etc.) y se ajustaron párrafos modelo (apertura, orden de votos y encabezados).\n" +
+    "Nota: debajo de cada párrafo con cambios se incluye el texto corregido final y, cuando corresponde, el cambio de formato (negrita/subrayado/cursiva).";
+
+  const p = body.insertParagraph(0, txt);
+  setBlueCommentStyle_(p);
+
+  // Línea en blanco para separar
+  body.insertParagraph(1, "");
+}
+
+function annotateDifferencesAsBlueComments_(annotatedDoc, correctedDocId) {
+  const bodyA = annotatedDoc.getBody();
+  const bodyC = DocumentApp.openById(correctedDocId).getBody();
+
+  const aBlocks = collectTextBlocks_(bodyA); // ya la tenés
+  const cBlocks = collectTextBlocks_(bodyC);
+
+  const anchors = buildAnchorMap_(cBlocks);        // ya la tenés
+  const cIndex  = buildNormalizedIndex_(cBlocks);  // ya la tenés
+
+  const usedC = {};
+
+  for (let i = 0; i < aBlocks.length; i++) {
+    const a = aBlocks[i];
+    const aText = a.text || "";
+    const aNorm = normalizeForMatch_(aText);
+
+    let j = -1;
+
+    // Match por anclas “fuertes” (evita errores)
+    if (/En la\s+(ciudad|Ciudad)\s+de\s+Córdoba/i.test(aText) && anchors.apertura !== -1) {
+      j = anchors.apertura;
+    } else if (/Las\s+cuestiones\s+a\s+resolver\s+son\s+las\s+siguientes/i.test(aText) && anchors.cuestiones !== -1) {
+      j = anchors.cuestiones;
+    } else if (/Los\s+señores\s+vocales\s+emitir[aá]n\s+sus\s+votos\s+en\s+el\s+siguiente\s+orden/i.test(aText) && anchors.votos !== -1) {
+      j = anchors.votos;
+    } else if (/^\s*RESUELVE\s*:/i.test(aText) && anchors.resuelve !== -1) {
+      j = anchors.resuelve;
+    } else {
+      j = findBestMatchIndex_(aNorm, cBlocks, cIndex, i); // ya la tenés
+    }
+
+    if (j === -1) continue;
+    usedC[j] = true;
+
+    const c = cBlocks[j];
+    const cText = c.text || "";
+
+    const textChanged = aText !== cText;
+
+    // Formato (negrita/subrayado/cursiva)
+    const fA = formatSignature_(a.el);
+    const fC = formatSignature_(c.el);
+    const fmtChanged = JSON.stringify(fA) !== JSON.stringify(fC);
+
+    if (!textChanged && !fmtChanged) continue;
+
+    const comment = buildBlueCommentText_(aText, cText, fA, fC);
+    insertBlueCommentAfterElement_(a.el, comment);
+  }
+
+  // Párrafos “agregados” en corregido que no matchearon con el original:
+  const extras = [];
+  for (let k = 0; k < cBlocks.length; k++) {
+    if (!usedC[k]) {
+      const t = (cBlocks[k].text || "").trim();
+      if (t) extras.push(t);
+    }
+  }
+
+  if (extras.length) {
+    const body = annotatedDoc.getBody();
+    const head = body.appendParagraph("Párrafos agregados en la corrección (no estaban en el original):");
+    setBlueCommentStyle_(head);
+
+    extras.forEach(tx => {
+      const p = body.appendParagraph("• " + tx);
+      setBlueCommentStyle_(p);
+    });
+  }
+}
+
+function buildBlueCommentText_(origText, corrText, fO, fC) {
+  const lines = [];
+  lines.push("COMENTARIO (cambios aplicados en la corrección):");
+
+  if (origText !== corrText) {
+    if (origText.trim() === corrText.trim()) {
+      lines.push("• Se normalizaron espacios/tabulaciones (sin cambiar el contenido).");
+    } else {
+      lines.push("• Texto corregido (versión final):");
+      lines.push(corrText);
+    }
+  }
+
+  const fmtMsg = describeFormatChange_(fO, fC);
+  if (fmtMsg.length) {
+    lines.push("• Formato:");
+    fmtMsg.forEach(m => lines.push("  - " + m));
+  }
+
+  return lines.join("\n");
+}
+
+function describeFormatChange_(a, b) {
+  const out = [];
+  if (a.anyBold !== b.anyBold || a.allBold !== b.allBold) {
+    if (b.allBold) out.push("se dejó todo el párrafo en negrita");
+    else if (!a.anyBold && b.anyBold) out.push("se agregó negrita a una parte del párrafo");
+    else if (a.anyBold && !b.anyBold) out.push("se quitó la negrita");
+  }
+  if (a.anyUnderline !== b.anyUnderline || a.allUnderline !== b.allUnderline) {
+    if (b.allUnderline) out.push("se dejó todo el párrafo subrayado");
+    else if (!a.anyUnderline && b.anyUnderline) out.push("se agregó subrayado a una parte del párrafo");
+    else if (a.anyUnderline && !b.anyUnderline) out.push("se quitó el subrayado");
+  }
+  if (a.anyItalic !== b.anyItalic || a.allItalic !== b.allItalic) {
+    if (b.allItalic) out.push("se dejó todo el párrafo en cursiva");
+    else if (!a.anyItalic && b.anyItalic) out.push("se agregó cursiva (p. ej., texto entre comillas)");
+    else if (a.anyItalic && !b.anyItalic) out.push("se quitó la cursiva");
+  }
+  return out;
+}
+
+function formatSignature_(paragraphOrListItem) {
+  const t = paragraphOrListItem.editAsText();
+  const s = t.getText() || "";
+
+  if (!s) {
+    return { anyBold:false, allBold:false, anyUnderline:false, allUnderline:false, anyItalic:false, allItalic:false };
+  }
+
+  let anyBold = false, anyUnderline = false, anyItalic = false;
+  let allBold = true, allUnderline = true, allItalic = true;
+
+  for (let i = 0; i < s.length; i++) {
+    const a = t.getAttributes(i) || {};
+    const b = (a.BOLD === true);
+    const u = (a.UNDERLINE === true);
+    const it = (a.ITALIC === true);
+
+    anyBold = anyBold || b;
+    anyUnderline = anyUnderline || u;
+    anyItalic = anyItalic || it;
+
+    allBold = allBold && b;
+    allUnderline = allUnderline && u;
+    allItalic = allItalic && it;
+  }
+
+  return { anyBold, allBold, anyUnderline, allUnderline, anyItalic, allItalic };
+}
+
+function insertBlueCommentAfterElement_(paragraphOrListItem, commentText) {
+  const parent = paragraphOrListItem.getParent();
+  const idx = parent.getChildIndex(paragraphOrListItem);
+
+  const p = parent.insertParagraph(idx + 1, commentText);
+  setBlueCommentStyle_(p);
+  return p;
+}
+
+function setBlueCommentStyle_(p) {
+  try {
+    p.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
+    p.setSpacingBefore(0);
+    p.setSpacingAfter(6);
+
+    const t = p.editAsText();
+    t.setForegroundColor("#0000FF");
+    t.setFontFamily("Times New Roman");
+    t.setFontSize(11);
+    t.setBold(false);
+    t.setUnderline(false);
+    // cursiva no hace falta, lo dejamos normal
+  } catch (e) {}
 }
 
 function forEachText_(element, fn) {
@@ -211,50 +417,51 @@ function forEachText_(element, fn) {
 function applyGeneralNormalizations_(doc, log) {
   const body = doc.getBody();
 
-  // Helpers: reemplazo global en todo el doc (preserva formato mejor que setText)
+  // Helper: reemplazo global (ojo: NO preserva negritas mixtas dentro del mismo Text-run,
+  // pero para estas normalizaciones “simples” suele estar OK)
   const R = (pattern, repl) => body.replaceText(pattern, repl);
+
+  // =========================
+  // A0) Sr./Sra. -> señor/señora (preserva formato)
+  // =========================
+  const cSr = normalizeSrSra_(doc);
+
+  // =========================
+  // A1) Lic. -> licenciado/licenciada según contexto (preserva formato)
+  // =========================
+  const cLic = normalizeLicenciadoConditional_(doc);
+
 
   // =========================
   // A) Dr./Dra. -> doctor/doctora (y plurales)
   // =========================
-  // Dr. / dr. / Dr / dr -> doctor
   R("\\b[Dd]r\\.?\\b", "doctor");
-  // Dra. / dra. / Dra / dra -> doctora
   R("\\b[Dd]ra\\.?\\b", "doctora");
-
-  // Plurales más comunes:
-  // Drs. / drs. -> doctores
   R("\\b[Dd]rs\\.?\\b", "doctores");
-  // Dras. / dras. -> doctoras
   R("\\b[Dd]ras\\.?\\b", "doctoras");
 
-  // Doctor/Doctora/Doctores/Doctoras siempre en minúscula
   R("\\bDoctor\\b", "doctor");
   R("\\bDoctora\\b", "doctora");
   R("\\bDoctores\\b", "doctores");
   R("\\bDoctoras\\b", "doctoras");
 
   // =========================
-  // B) Variantes de número -> n°
+  // B) Variantes de número -> n° (sin lookahead)
   // =========================
-  // n.° / N.° / n. ° / N. ° / N° / nro. / Nro. etc. -> n°
-  // (Tolerante a espacios)
-  R("\\b(?:n\\s*\\.?\\s*[°º]|N\\s*\\.?\\s*[°º]|N°|nro\\.?|Nro\\.?)\\b", "n°");
+  const cNGrado = normalizeNumeroSymbolNGrado_(doc); // (debe ser la versión sin setText)
 
-  // (Opcional) si te aparece "n °" suelto por conversión rara:
+  // Si aparece "n °" suelto por conversión rara
   R("\\bn\\s*°\\b", "n°");
 
   // =========================
   // C) Si antes viene sentencia/auto/decreto/resolución/dictamen -> Capitalizar + "n°"
   // =========================
-  // OJO: lo hago SOLO cuando está pegado al "n°"
   R("\\bsentencia\\s+n°\\b", "Sentencia n°");
   R("\\bauto\\s+n°\\b", "Auto n°");
   R("\\bdecreto\\s+n°\\b", "Decreto n°");
   R("\\bresoluci[oó]n\\s+n°\\b", "Resolución n°");
   R("\\bdictamen\\s+n°\\b", "Dictamen n°");
 
-  // Si te llega en mayúscula total por plantillas:
   R("\\bSENTENCIA\\s+n°\\b", "Sentencia n°");
   R("\\bAUTO\\s+n°\\b", "Auto n°");
   R("\\bDECRETO\\s+n°\\b", "Decreto n°");
@@ -264,60 +471,471 @@ function applyGeneralNormalizations_(doc, log) {
   // =========================
   // D) "Sala Penal" siempre así
   // =========================
-  R("\\bsala\\s+penal\\b", "Sala Penal");        // convierte "sala penal"
-  R("\\bSala\\s+penal\\b", "Sala Penal");        // por si viene Sala penal
-
+  R("\\bsala\\s+penal\\b", "Sala Penal");
+  R("\\bSala\\s+penal\\b", "Sala Penal");
 
   // =========================
-  // E) Siglas sin puntos (CSJN/TSJ/CP/CN/CPP)  ✅ sin lookahead
+  // E) Siglas sin puntos (CSJN/TSJ/CP/CN/CPP)
   // =========================
-
-  // CSJN: con punto final
-  R("\\bC\\s*\\.\\s*S\\s*\\.\\s*J\\s*\\.\\s*N\\s*\\.(\\s|$)", "CSJN.$1");
-  // CSJN: sin punto final
+  R("\\bC\\s*\\.\\s*S\\s*\\.\\s*J\\s*\\.\\s*N\\s*\\.", "CSJN");
   R("\\bC\\s*\\.\\s*S\\s*\\.\\s*J\\s*\\.\\s*N\\b", "CSJN");
 
-  // TSJ: con punto final
-  R("\\bT\\s*\\.\\s*S\\s*\\.\\s*J\\s*\\.(\\s|$)", "TSJ.$1");
-  // TSJ: sin punto final
+  R("\\bT\\s*\\.\\s*S\\s*\\.\\s*J\\s*\\.", "TSJ");
   R("\\bT\\s*\\.\\s*S\\s*\\.\\s*J\\b", "TSJ");
 
-  // CP: con punto final
-  R("\\bC\\s*\\.\\s*P\\s*\\.(\\s|$)", "CP.$1");
-  // CP: sin punto final
+  R("\\bC\\s*\\.\\s*P\\s*\\.", "CP");
   R("\\bC\\s*\\.\\s*P\\b", "CP");
 
-  // CN: con punto final
-  R("\\bC\\s*\\.\\s*N\\s*\\.(\\s|$)", "CN.$1");
-  // CN: sin punto final
+  R("\\bC\\s*\\.\\s*N\\s*\\.", "CN");
   R("\\bC\\s*\\.\\s*N\\b", "CN");
 
-  // CPP: con punto final
-  R("\\bC\\s*\\.\\s*P\\s*\\.\\s*P\\s*\\.(\\s|$)", "CPP.$1");
-  // CPP: sin punto final
+  R("\\bC\\s*\\.\\s*P\\s*\\.\\s*P\\s*\\.", "CPP");
   R("\\bC\\s*\\.\\s*P\\s*\\.\\s*P\\b", "CPP");
 
-  R("\\bSALA\\s+PENAL\\b", "Sala Penal");
-
+  // =========================
+  // F) Artículos del/de la + siglas CP/CPP/CN/CSJN/TSJ
+  // (IMPORTANTE: versiones reescritas con replaceInTextPreserveStyle_ para no romper negritas)
+  // =========================
+  const cArtOut = normalizeArticlesOutsideParens_(doc); // versión sin setText
+  const cArtIn  = normalizeArticlesInsideParens_(doc);  // versión sin setText
 
   // =========================
-  // F) Dentro de paréntesis: NO usar "del/de la/de los/de las" antes de siglas
+  // G) Fechas numéricas -> d/m/yyyy con "/"
+  // (IMPORTANTE: usar versión sin setText, con replaceInTextPreserveStyle_)
   // =========================
+  const cFechas = normalizeNumericDates_(doc);
+
+  // =========================
+  // H) Nuevas normalizaciones (todas deben estar reescritas sin setText)
+  // =========================
+  const cDec = normalizeDecimoCompuestos_(doc);
+  const cMP  = normalizeMinisterioPublico_(doc);
+  const cOrd = normalizeOrdinalesAbreviados_(doc);
+  const cTri = normalizeTribunalCase_(doc);
+  const cVoc = normalizeVocalConditional_(doc);
+
+  // =========================
+  // LOGS
+  // =========================
+  if (log) {
+    log.push(makeChange_(
+      "GENERAL_NORMALIZATIONS",
+      "Documento completo",
+      "",
+      `Aplicadas normalizaciones generales. n°=${cNGrado || 0}; artOut=${cArtOut || 0}; artIn=${cArtIn || 0}; fechas=${cFechas || 0}.`,
+      {}
+    ));
+
+    log.push(makeChange_(
+      "NEW_NORMALIZATIONS",
+      "Documento completo",
+      "",
+      `Aplicadas: decimoComp=${cDec || 0}, MP=${cMP || 0}, ordinales=${cOrd || 0}, tribunal=${cTri || 0}, vocal=${cVoc || 0}, sr/sra=${cSr||0}; lic=${cLic||0}.`,
+      {}
+    ));
+  }
+}
+
+
+function replaceInTextPreserveStyle_(textEl, regex, makeReplacement) {
+  const s = textEl.getText() || "";
+  if (!s) return 0;
+
+  // RE2 en Apps Script: NO lookahead/lookbehind. Regex normal con flags g/i.
+  const flags = (regex.ignoreCase ? "i" : "") + "g";
+  const rx = new RegExp(regex.source, flags);
+
+  let m;
+  const matches = [];
+
+  while ((m = rx.exec(s)) !== null) {
+    const start = m.index;
+    const end = start + m[0].length - 1;
+
+    const repl = (typeof makeReplacement === "function")
+      ? makeReplacement(m, s)
+      : String(makeReplacement);
+
+    if (repl !== m[0]) matches.push({ start, end, repl });
+    if (rx.lastIndex === m.index) rx.lastIndex++; // safety
+  }
+
+  if (!matches.length) return 0;
+
+  // Aplicar de atrás hacia adelante para no desfasar índices
+  for (let i = matches.length - 1; i >= 0; i--) {
+    const { start, end, repl } = matches[i];
+    try {
+      const attrs = textEl.getAttributes(start); // copia estilo del inicio del match
+      textEl.deleteText(start, end);
+      textEl.insertText(start, repl);
+      textEl.setAttributes(start, start + repl.length - 1, attrs); // lo aplica al texto insertado
+    } catch (e) {}
+  }
+
+  return matches.length;
+}
+
+function normalizeDecimoCompuestos_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const rules = [
+    [/\bDecimo\s+Primera\b/ig, "Decimoprimera"],
+    [/\bDécimo\s+Primera\b/ig, "Decimoprimera"],
+    [/\bDecimo\s+Segunda\b/ig, "Decimosegunda"],
+    [/\bDécimo\s+Segunda\b/ig, "Decimosegunda"],
+    [/\bDecimo\s+Tercera\b/ig, "Decimotercera"],
+    [/\bDécimo\s+Tercera\b/ig, "Decimotercera"],
+    [/\bDecimo\s+Cuarta\b/ig, "Decimocuarta"],
+    [/\bDécimo\s+Cuarta\b/ig, "Decimocuarta"],
+    [/\bDecimo\s+Quinta\b/ig, "Decimoquinta"],
+    [/\bDécimo\s+Quinta\b/ig, "Decimoquinta"],
+    [/\bDecimo\s+Sexta\b/ig, "Decimosexta"],
+    [/\bDécimo\s+Sexta\b/ig, "Decimosexta"],
+    [/\bDecimo\s+Séptima\b/ig, "Decimoséptima"],
+    [/\bDécimo\s+Séptima\b/ig, "Decimoséptima"],
+    [/\bDecimo\s+Septima\b/ig, "Decimoséptima"],
+    [/\bDécimo\s+Septima\b/ig, "Decimoséptima"],
+    [/\bDecimo\s+Octava\b/ig, "Decimoctava"],
+    [/\bDécimo\s+Octava\b/ig, "Decimoctava"],
+    [/\bDecimo\s+Novena\b/ig, "Decimonovena"],
+    [/\bDécimo\s+Novena\b/ig, "Decimonovena"],
+    [/\bVigésimo\s+Primera\b/ig, "Vigesimoprimera"],
+    [/\bVigésimo\s+Segunda\b/ig, "Vigesimosegunda"],
+  ];
+
   forEachText_(body, (textEl) => {
-    const src = textEl.getText();
-    const out = src.replace(
-      /\(([^)]*?\bart\.?\s*\d+[^)]*?)\s+(del|de la|de los|de las)\s+(C\.?\s*P\.?\s*P\.?|C\.?\s*P\.?|C\.?\s*N\.?|C\.?\s*S\.?\s*J\.?\s*N\.?|T\.?\s*S\.?\s*J\.?)\s*\)/gi,
-      (_, a, __, sigla) => {
-        const norm = sigla.replace(/\./g, "").replace(/\s+/g, "").toUpperCase();
-        return `(${a.trim()} ${norm})`;
-      }
-    );
-
-    if (out !== src) textEl.setText(out);
+    rules.forEach(([re, repl]) => {
+      touched += replaceInTextPreserveStyle_(textEl, re, repl);
+    });
   });
 
-  if (log) log.push(makeChange_("GENERAL_NORMALIZATIONS", "Documento completo", "", "Aplicadas normalizaciones generales (Dr./Dra., n°, capitalización, siglas, Sala Penal y paréntesis sin literales de captura).", {}));
+  return touched;
 }
+
+
+function normalizeMinisterioPublico_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const reDef = /\bministerio\s+p[uú]blico\s+de\s+la\s+defensa\b/ig;
+  const reMPF = /\bministerio\s+p[uú]blico\s+fiscal\b/ig;
+  const reMP  = /\bministerio\s+p[uú]blico\b/ig;
+
+  forEachText_(body, (textEl) => {
+    // 1) Defensa primero (así no termina convertido a Fiscal)
+    touched += replaceInTextPreserveStyle_(textEl, reDef, "Ministerio Público de la Defensa");
+
+    // 2) MP Fiscal explícito
+    touched += replaceInTextPreserveStyle_(textEl, reMPF, "Ministerio Público Fiscal");
+
+    // 3) “Ministerio Público” suelto -> Fiscal, salvo que en el texto inmediato diga “de la Defensa”
+    touched += replaceInTextPreserveStyle_(textEl, reMP, (m, full) => {
+      const idx = m.index;
+      const tail = (full || "").slice(idx, idx + 60).toLowerCase();
+      if (/\bministerio\s+p[uú]blico\s+de\s+la\s+defensa\b/i.test(tail)) return m[0]; // dejar
+      return "Ministerio Público Fiscal";
+    });
+  });
+
+  return touched;
+}
+
+
+function normalizeOrdinalesAbreviados_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const re = /\b([1-9]\d{0,2})\s*(ro|do|to|mo|no|vo)\.?\b/ig;
+
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, re, (m) => `${m[1]}°`);
+  });
+
+  return touched;
+}
+
+
+function normalizeTribunalCase_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const reTribunal = /\bTribunal\b|\bTRIBUNAL\b/g;
+  const reEste = /\beste\s+tribunal\b/ig;
+  const reAlto = /\balto\s+tribunal\b/ig;
+  const reTS   = /\btribunal\s+superior\b/ig;
+  const reTSJ  = /\btribunal\s+superior\s+de\s+justicia\b/ig;
+
+  forEachText_(body, (textEl) => {
+    // 1) bajar “Tribunal” a minúscula (solo la palabra)
+    touched += replaceInTextPreserveStyle_(textEl, reTribunal, "tribunal");
+
+    // 2) restaurar excepciones
+    touched += replaceInTextPreserveStyle_(textEl, reEste, "este Tribunal");
+    touched += replaceInTextPreserveStyle_(textEl, reAlto, "Alto Tribunal");
+    // TSJ antes que TS (por seguridad)
+    touched += replaceInTextPreserveStyle_(textEl, reTSJ, "Tribunal Superior de Justicia");
+    touched += replaceInTextPreserveStyle_(textEl, reTS, "Tribunal Superior");
+  });
+
+  return touched;
+}
+
+
+function normalizeVocalConditional_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const rePreopinante = /\bvocal\s+preopinante\b/ig;
+  const rePrimerVoto  = /\bvocal\s+del\s+primer\s+voto\b/ig;
+  const reAntecede    = /\bvocal\s+que\s+antecede\b/ig;
+
+  forEachText_(body, (textEl) => {
+    // vocal doctor/a + NOMBRE (solo si el nombre está en VOCALES)
+    for (const v of VOCALES) {
+      const esc = v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      touched += replaceInTextPreserveStyle_(textEl, new RegExp(`\\bvocal\\s+doctor\\s+${esc}\\b`, "ig"), `Vocal doctor ${v}`);
+      touched += replaceInTextPreserveStyle_(textEl, new RegExp(`\\bvocal\\s+doctora\\s+${esc}\\b`, "ig"), `Vocal doctora ${v}`);
+    }
+
+    // frases fijas
+    touched += replaceInTextPreserveStyle_(textEl, rePreopinante, "Vocal preopinante");
+    touched += replaceInTextPreserveStyle_(textEl, rePrimerVoto,  "Vocal del primer voto");
+    touched += replaceInTextPreserveStyle_(textEl, reAntecede,    "Vocal que antecede");
+  });
+
+  return touched;
+}
+
+
+
+function normalizeNumeroSymbolNGrado_(doc) {
+  const body = doc.getBody();
+
+  // Captura: n.° / N.° / n° / N° / n º / N . º etc.
+  // Sin lookahead: reemplazamos SOLO el match "n...°" y no tocamos lo que sigue.
+  const rx = /\b[nN]\s*\.?\s*[°º]/g;
+
+  let touched = 0;
+
+  forEachText_(body, (textEl) => {
+    const s = textEl.getText() || "";
+    if (!s) return;
+    if (s.search(rx) === -1) return;
+
+    // Buscamos todos los matches con índices
+    const matches = [];
+    rx.lastIndex = 0;
+    let m;
+    while ((m = rx.exec(s)) !== null) {
+      matches.push({ start: m.index, end: m.index + m[0].length - 1 });
+      if (rx.lastIndex === m.index) rx.lastIndex++; // safety
+    }
+    if (!matches.length) return;
+
+    // Aplicamos de atrás para adelante para no desfasar índices
+    for (let i = matches.length - 1; i >= 0; i--) {
+      const { start, end } = matches[i];
+
+      try {
+        // Guardamos atributos del primer char del match para mantener estilo
+        const attrs = textEl.getAttributes(start);
+
+        textEl.deleteText(start, end);
+        textEl.insertText(start, "n°");
+
+        // Restaurar estilo del reemplazo
+        textEl.setAttributes(start, start + 1, attrs);
+
+        touched++;
+      } catch (e) {
+        // no frenamos toda la ejecución
+      }
+    }
+  });
+
+  return touched;
+}
+
+function normalizeNumericDates_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const re = /\b(\d{1,2})\s*[\/-]\s*(\d{1,2})\s*[\/-]\s*(\d{2,4})\b/g;
+
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, re, (m) => {
+      const d = parseInt(m[1], 10);
+      const mo = parseInt(m[2], 10);
+      const yRaw = m[3];
+      let y = parseInt(yRaw, 10);
+
+      if (!(d >= 1 && d <= 31 && mo >= 1 && mo <= 12)) return m[0];
+
+      if (yRaw.length === 2) y = (y <= 29) ? (2000 + y) : (1900 + y);
+      else if (yRaw.length === 3) return m[0];
+      else if (y < 1000 || y > 2999) return m[0];
+
+      return `${d}/${mo}/${y}`;
+    });
+  });
+
+  return touched;
+}
+
+
+
+function articleForSigla_(sigla) {
+  const s = (sigla || "").toUpperCase();
+  if (s === "CN" || s === "CSJN") return "de la";
+  // CP / CPP / TSJ (y cualquier otra que quieras sumar)
+  return "del";
+}
+
+function isInsideParens_(text, index) {
+  // Determina si la posición `index` cae dentro de un paréntesis abierto no cerrado
+  // (simple y suficiente para casos normales de textos jurídicos)
+  let depth = 0;
+  for (let i = 0; i < index; i++) {
+    const ch = text[i];
+    if (ch === "(") depth++;
+    else if (ch === ")" && depth > 0) depth--;
+  }
+  return depth > 0;
+}
+
+function buildParenDepthArray_(s, startDepth) {
+  s = s || "";
+  const depth = new Array(s.length + 1);
+  let d = startDepth || 0;
+  depth[0] = d;
+
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (ch === "(") d++;
+    else if (ch === ")" && d > 0) d--;
+    depth[i + 1] = d;
+  }
+  return depth;
+}
+
+/**
+ * Dentro de paréntesis: elimina "del/de la/de los/de las" antes de CP/CPP/CN/CSJN/TSJ
+ * Ej: "(art. 54 del CP)" -> "(art. 54 CP)"
+ * Funciona aunque el "(" esté en un Text y el "del CP" en otro.
+ */
+function normalizeArticlesInsideParens_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  // Dentro de paréntesis: "( ... art. ... del CP ... )" -> "( ... art. ... CP ... )"
+  // Como no hay lookbehind, matcheamos el tramo y lo rearmamos.
+  const re = /\(([^)]*?\b(?:art\.?|arts\.?|número)\b[^)]*?)\s+(del|de la|de los|de las)\s+(CP|CPP|CN|CSJN|TSJ)\b/ig;
+
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, re, (m) => `(${m[1]} ${m[3]}`);
+  });
+
+  return touched;
+}
+
+
+function normalizeFirstParagraphFlow_(txt) {
+  if (!txt) return txt;
+
+  // 1) "...) . La sentencia se pronuncia con motivo del ..." -> "...), con motivo del ..."
+  // (cubre "sentencia" y "resolución")
+  txt = txt.replace(
+    /(\)\s*)\.\s*La\s+(?:sentencia|resoluci[oó]n)\s+se\s+pronuncia\s+con\s+motivo\s+del\s+/ig,
+    "$1, con motivo del "
+  );
+
+  // fallback: si no hay ")" justo antes
+  txt = txt.replace(
+    /\.\s*La\s+(?:sentencia|resoluci[oó]n)\s+se\s+pronuncia\s+con\s+motivo\s+del\s+/ig,
+    ", con motivo del "
+  );
+
+  // 2) "J. La impugnación se presenta en contra de la/del/..." -> "J., en contra de la/del/..."
+  txt = txt.replace(
+    /([A-ZÁÉÍÓÚÑ])\.\s*La\s+impugnaci[oó]n\s+se\s+presenta\s+en\s+contra\s+(del|de la|de los|de las)\s+/ig,
+    (m, ini, art) => `${ini}., en contra ${art.toLowerCase()} `
+  );
+
+  // 3) ". La impugnación se presenta en contra de la/del/..." -> ", en contra de la/del/..."
+  // (si ya venía con coma, también)
+  txt = txt.replace(
+    /[.,]\s*La\s+impugnaci[oó]n\s+se\s+presenta\s+en\s+contra\s+(del|de la|de los|de las)\s+/ig,
+    (m, art) => `, en contra ${art.toLowerCase()} `
+  );
+
+  // 1) Caso especial: si antes hay iniciales tipo "R.A.M." mantenemos el punto y agregamos coma.
+  txt = txt.replace(
+    /((?:[A-ZÁÉÍÓÚÑ]\.){2,})\s*Se\s+(?:presenta|interpone|deduce|plantea|articula|formula|promueve|dirige)\s+en\s+contra\s+de\s+/g,
+    "$1, en contra de "
+  );
+
+  // 2) Caso general: reemplaza el punto por coma.
+  txt = txt.replace(
+    /\.\s*Se\s+(?:presenta|interpone|deduce|plantea|articula|formula|promueve|dirige)\s+en\s+contra\s+de\s+/ig,
+    ", en contra de "
+  );
+
+
+  // Limpieza de signos/espacios
+  txt = txt
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/,\s*\./g, ".")
+    .trim();
+
+  return txt;
+}
+
+
+function normalizeArticlesOutsideParens_(doc) {
+  const body = doc.getBody();
+
+  // (art/arts/número ... ) + (opcional artículo) + SIGLA
+  const rx = /\b(?:art\.?|arts\.?|número)\b[\s\S]{0,180}?\s+(?:(del|de la|de los|de las)\s+)?(CP|CPP|CN|CSJN|TSJ)\b/ig;
+
+  let touched = 0;
+
+  forEachText_(body, (textEl) => {
+    const src = textEl.getText() || "";
+    if (!src) return;
+
+    // Necesitamos iterar matches y decidir caso por caso (y saltar si está dentro de paréntesis)
+    touched += replaceInTextPreserveStyle_(textEl, rx, (m, full) => {
+      const matchText = m[0];
+      const article = (m[1] || "").toLowerCase();
+      const sigla = (m[2] || "").toUpperCase();
+
+      // ¿Este match cae dentro de paréntesis? (usamos el índice del match dentro del string del run)
+      const idx = m.index;
+      if (isInsideParens_(full, idx)) return matchText; // no tocar
+
+      const desired = articleForSigla_(sigla); // "del" o "de la"
+
+      if (!article) {
+        // insertar artículo antes de la sigla dentro del match
+        return matchText.replace(new RegExp("\\s+" + sigla + "\\b"), " " + desired + " " + sigla);
+      }
+
+      if (article !== desired) {
+        // corregir artículo equivocado
+        return matchText.replace(new RegExp("\\b" + article.replace(/\s+/g, "\\s+") + "\\s+" + sigla + "\\b", "i"), desired + " " + sigla);
+      }
+
+      return matchText; // ya estaba bien
+    });
+  });
+
+  return touched;
+}
+
 
 
 function shareAnyoneWithLinkView_(file) {
@@ -489,16 +1107,18 @@ function elementToParagraphOrListItem_(el) {
 }
 
 // ====== PRIMER PÁRRAFO (APERTURA) ======
-
 function isFirstParagraphCanonical_(txt, settings) {
-  const s = (txt || "").replace(/[	 ]/g, " ").replace(/\s+/g, " ").trim();
-  const hasCause = /emite\s+sentencia\s+en\s+la\s+causa/i.test(s);
+  const s = (txt || "")
+    .replace(/[\t\u00A0]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const hasCause = /\b(emitir[aá]|emite)\s+sentencia\s+en\s+(los\s+autos|la\s+causa)\b/i.test(s);
   const hasCaratulaQuotes = /["“”][^"“”]+["“”]/.test(s);
   const hasSac = /\(\s*SAC\s+[^)]+\)/i.test(s);
   const hasResolutionPhrase = /la\s+resoluci[oó]n\s+se\s+pronuncia/i.test(s);
 
-  // Solo protegemos el encabezado cuando, además de la estructura,
-  // coincide explícitamente la presidencia e integración elegidas.
+  // Si no hay settings, solo validamos estructura base
   if (!settings || !settings.presidente || !Array.isArray(settings.vocales)) {
     return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase;
   }
@@ -511,11 +1131,31 @@ function isFirstParagraphCanonical_(txt, settings) {
   const v2 = otros[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const v3 = otros[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+  // Género dinámico: 2 mujeres => "las señoras Vocales doctoras", si no => "los señores Vocales doctores"
+  const gens = otros.map(n => (VOCALES_GENERO[n] || "M"));
+  const allF = gens.every(g => g === "F");
+  const art = allF ? "las" : "los";
+  const sen = allF ? "señoras" : "señores";
+  const doc = allF ? "doctoras" : "doctores";
+
   const hasExpectedPresidency = new RegExp(`presidida\\s+por\\s+${presTit}`, "i").test(s);
-  const hasExpectedIntegration = new RegExp(`integrada\\s+por\\s+los\\s+señores\\s+Vocales\\s+doctores\\s+${v2}\\s+y\\s+${v3}`, "i").test(s);
+
+  // Aceptamos DOS formatos: "e integrada por ..." o "con asistencia de ..."
+  const rxIntegrada = new RegExp(
+    `integrada\\s+por\\s+${art}\\s+${sen}\\s+Vocales\\s+${doc}\\s+${v2}\\s+y\\s+${v3}`,
+    "i"
+  );
+
+  const rxAsistencia = new RegExp(
+    `con\\s+asistencia\\s+de\\s+${art}\\s+${sen}\\s+Vocales\\s+${doc}\\s+${v2}\\s+y\\s+${v3}`,
+    "i"
+  );
+
+  const hasExpectedIntegration = rxIntegrada.test(s) || rxAsistencia.test(s);
 
   return hasCause && hasCaratulaQuotes && hasSac && hasResolutionPhrase && hasExpectedPresidency && hasExpectedIntegration;
 }
+
 
 function applyFirstParagraphRules_(doc, settings, log) {
   const body = doc.getBody();
@@ -536,110 +1176,155 @@ function applyFirstParagraphRules_(doc, settings, log) {
 
   log.push(makeChange_("DEBUG_APERTURA", where, txt, "", {}));
 
+  // Normalizaciones puntuales previas
   txt = txt.replace(/^En la\s+Ciudad\s+de\s+Córdoba\b\s*,?/i, "En la ciudad de Córdoba,");
   txt = txt.replace(/a los fines de dictar sentencia en los autos/gi, "emitirá sentencia en los autos");
   txt = txt.replace(
     /Abierto el acto por la señora presidenta, se informa que las cuestiones a resolver son las siguientes:/gi,
     "Las cuestiones a resolver son las siguientes:"
   );
+
   txt = txt.replace(/\ben contra de la sentencia\b/gi, "en contra de la Sentencia");
   txt = txt.replace(/\ben contra del auto\b/gi, "en contra del Auto");
   txt = txt.replace(/\bcontra\s+la\s+sentencia\b/gi, "en contra de la Sentencia");
   txt = txt.replace(/\bcontra\s+el\s+auto\b/gi, "en contra del Auto");
+
   txt = txt.replace(
     /(La\s+resoluci[oó]n\s+se\s+pronuncia\s+con\s+motivo\s+del\s+recurso[\s\S]*?)\.\s*(La\s+impugnaci[oó]n\s+se\s+presenta\s+en\s+contra\s+de\s+(la\s+Sentencia|el\s+Auto))/i,
     "$1, $2"
   );
+
   txt = normalizeResolucionNumeroYFechaEnLetras_(txt);
   txt = normalizeEnContraStructure_(txt);
   txt = normalizeNominacionEnLetras_(txt);
-  txt = txt.replace(/\bTodos\s+los\s+recursos\s+se\s+interponen\s+contra\s+(la\s+Sentencia|el\s+Auto)\b/gi,
-                    "Todos los recursos se interponen en contra de $1");
+  // ✅ NUEVO: arregla ". La sentencia se pronuncia..." y ". La impugnación..."
+  txt = normalizeFirstParagraphFlow_(txt);
 
-
+  txt = txt.replace(
+    /\bTodos\s+los\s+recursos\s+se\s+interponen\s+contra\s+(la\s+Sentencia|el\s+Auto)\b/gi,
+    "Todos los recursos se interponen en contra de $1"
+  );
 
   const esModeloLargo =
     /a los\s+.*días?.*siendo.*se constituy[oó].*Sala Penal/i.test(txt) ||
     /se constituy[oó].*audiencia pública.*Sala Penal/i.test(txt);
 
   const esTSJ = /Sala Penal del Tribunal Superior de Justicia/i.test(txt);
-  const esPlantillaCruda = /emitir[aá]\s+sentencia\s+en\s+los\s+autos/i.test(txt);
+
+  // ✅ FIX: cubre “emite/emitirá sentencia en la causa/los autos”
+  const esPlantillaCruda = /\b(emitir[aá]|emite)\s+sentencia\s+en\s+(los\s+autos|la\s+causa)\b/i.test(txt);
 
   if (esModeloLargo || (esTSJ && esPlantillaCruda)) {
+    // Tomamos la cola desde “emite/emitirá sentencia …”
     let tail = "";
-    const mTail = txt.match(/(emitirá sentencia[\s\S]*)/i);
-    if (mTail) tail = mTail[1];
+    const mTail = txt.match(/(emitir[aá]|emite)\s+sentencia[\s\S]*/i);
+    if (mTail) tail = mTail[0];
 
+    // Fallback por si algo raro:
     if (!tail) {
       const mAutos = txt.match(/(en los autos[\s\S]*)/i);
       if (mAutos) tail = "emitirá sentencia " + mAutos[1].replace(/^\s*emitirá sentencia\s*/i, "");
     }
 
+    // Forzamos “emitirá” al reconstruir (aunque venga “emite”)
+    if (tail) {
+      tail = tail.replace(/^(emitir[aá]|emite)\s+sentencia\b/i, "emitirá sentencia");
+    }
+
     const presidente = settings.presidente;
-    const otros = settings.vocales.filter(v => v !== presidente);
-    const v2 = otros[0];
-    const v3 = otros[1];
+    const otros = settings.vocales.filter(v => v !== presidente); // 2 asistentes
 
     const presTit = vocalTitulo_(presidente);
-    const integracion = `los señores Vocales doctores ${v2} y ${v3}`;
+
+    // ✅ Género dinámico para “Vocales doctores/doctoras”
+    const gens = otros.map(n => (VOCALES_GENERO[n] || "M"));
+    const allF = gens.length && gens.every(g => g === "F");
+    const art = allF ? "las" : "los";
+    const sen = allF ? "señoras" : "señores";
+    const docu = allF ? "doctoras" : "doctores";
+
+    // Podés elegir el estilo: “e integrada por …” o “con asistencia de …”.
+    // Yo dejo “e integrada por …” como venías, pero con género dinámico:
+    const integracion = `${art} ${sen} Vocales ${docu} ${joinWithY_(otros)}`;
 
     let nuevo =
-      `En la ciudad de Córdoba, la Sala Penal del Tribunal Superior de Justicia, presidida por ${presTit} e integrada por ${integracion}, ` +
+      `En la ciudad de Córdoba, la Sala Penal del Tribunal Superior de Justicia, ` +
+      `presidida por ${presTit}, con asistencia de ${integracion}, ` +
       (tail ? tail : "emitirá sentencia en los autos ");
 
-    nuevo = nuevo.replace(/\s+,/g, ",").replace(/,\s*,/g, ", ").replace(/\s{2,}/g, " ");
+    nuevo = nuevo.replace(/\s+,/g, ",").replace(/,\s*,/g, ", ").replace(/\s{2,}/g, " ").trim();
 
     p.setText(nuevo);
 
+    // ✅ FIX NEGRITA: limpiar todo el párrafo y dejar solo carátula entre comillas
+    const t = p.editAsText();
+    const len = (p.getText() || "").length;
+    if (len > 0) t.setBold(0, len - 1, false);
+    boldAutosBetweenQuotes_(p);
+
+    // Estilo
     p.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
     removeAllIndents_(p, DocumentApp.ElementType.PARAGRAPH);
     p.setLineSpacing(1.5);
     p.setSpacingBefore(0);
     p.setSpacingAfter(0);
     p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
-    // FIX: sacar subrayado heredado del DOCX
     clearUnderline_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, nuevo, {}));
     return;
   }
 
+  // Si NO reconstruimos, pero sí hubo normalizaciones, aplicamos texto y estilos
   if (txt !== beforeAll) {
     p.setText(txt);
+
+    // opcional: también acá podrías limpiar negrita si querés consistencia:
+    // const t = p.editAsText();
+    // const len = (p.getText() || "").length;
+    // if (len > 0) t.setBold(0, len - 1, false);
+    // boldAutosBetweenQuotes_(p);
+
     p.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
     removeAllIndents_(p, DocumentApp.ElementType.PARAGRAPH);
     p.setLineSpacing(1.5);
     p.setSpacingBefore(0);
     p.setSpacingAfter(0);
     p.editAsText().setFontFamily("Times New Roman").setFontSize(12);
-
     clearUnderline_(p);
 
     log.push(makeChange_("P1_RULES", where, beforeAll, txt, {
       location: found.container === "BODY"
-        ? { container:"BODY", index: found.index }
-        : { container:"TABLE", tablePath: found.tablePath },
-
+        ? { container: "BODY", index: found.index }
+        : { container: "TABLE", tablePath: found.tablePath },
       highlights: [
-        // ejemplos típicos (agregás/quitás según qué cambiaste en el texto)
         { kind:"literal", text:"a los fines de dictar sentencia en los autos" },
-
-        // resaltar SOLO el número cuando venía “n° 63 / número 63”
         { kind:"regex", re:"\\b(?:Sentencia|Auto)\\s*(?:n[°ºo]\\.?|nº|n°|nro\\.?|número)\\s*([0-9]{1,4})\\b", group:1 },
-
-        // si querés la parte “a los ... se constituyó...” como error del modelo
         { kind:"regex", re:"\\ba\\s+los[\\s\\S]{0,140}?se\\s+constituy[oó]\\s+en\\s+audiencia\\s+p[úu]blica\\b", group:0 },
-
-        // texto entre comillas que debería estar en negrita (solo si NO está bold)
         { kind:"regex", re:"[\"“«]([^\"”»]*\\bSAC\\s*\\d+\\b[^\"”»]*)[\"”»]", group:1, onlyIfNotBold:true }
       ]
     }));
-
-
   } else {
     log.push(makeChange_("P1_RULES", where, "(sin cambios)", "(ya estaba correcto o no coincidió)", {}));
   }
 }
+
+
+function asistentesArticuloYTitulo_(nombres) {
+  // nombres: array de 2 vocales (sin el presidente)
+  const gens = (nombres || []).map(v => (VOCALES_GENERO[v] || "M"));
+  const allF = gens.length && gens.every(g => g === "F");
+
+  return allF
+    ? { art: "las", senores: "señoras", doct: "doctoras" }
+    : { art: "los", senores: "señores", doct: "doctores" };
+}
+
+function asistentesFrase_(nombres) {
+  const a = asistentesArticuloYTitulo_(nombres);
+  return `${a.art} ${a.senores} Vocales ${a.doct} ${joinWithY_(nombres)}`;
+}
+
 
 function ordinalFemenino_(n) {
   const map = {
@@ -767,7 +1452,7 @@ function applyVotesLine_(doc, settings, log) {
   const body = doc.getBody();
 
   const desired =
-    `Los señores vocales emitirán sus votos en el siguiente orden: doctores ${joinWithY_(settings.ordenVotos)}.`;
+    `Los señores Vocales emitirán sus votos en el siguiente orden: doctores ${joinWithY_(settings.ordenVotos)}.`;
 
   const votesAnyRegex =
     /^\s*Los\s+(Sres\.?|señores)\s+Vocales?\s+emitir[aá]n\s+sus\s+votos\s+en\s+el\s+siguiente\s+orden\s*:/i;
@@ -944,6 +1629,17 @@ function fixSecondParagraphAbiertoElActo_(doc, log) {
   target.setSpacingAfter(0);
   target.editAsText().setFontFamily("Times New Roman").setFontSize(12);
 
+  // ✅ NUEVO: dejar el texto NORMAL (sin negrita/cursiva/subrayado)
+  {
+    const t = target.editAsText();
+    const len = (t.getText() || "").length;
+    if (len > 0) {
+      t.setBold(0, len - 1, false);
+      t.setItalic(0, len - 1, false);
+      t.setUnderline(0, len - 1, false);
+    }
+  }
+
   log.push(makeChange_("QUESTIONS_INTRO", `Body párrafo ${targetIndex + 1}`, before, after, { paragraphIndex: targetIndex }));
 }
 
@@ -958,9 +1654,10 @@ function applyVotersInSections_(doc, settings, log) {
   const voteLineRegexNormal =
     /^(El|La)\s+(señor|señora)\s+Vocal\s+(doctor|doctora)\s+(.+?)\s*,?\s+dijo:\s*$/i;
 
-  // Caso plantilla con placeholders (como tu ejemplo)
+
+  // Caso plantilla con placeholders (robusto)
   const voteLineRegexPlaceholder =
-    /^El\/La\s+señor\/a\s+Vocal\s+doctor\/a\s*.*,\s*dijo:\s*$/i;
+    /^El\s*\/\s*La\s+(?:señor|senor)\s*\/\s*a\s+Vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
 
   const sectionRegex = /^A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N/i;
 
@@ -1011,10 +1708,12 @@ function applyVotersInSections_(doc, settings, log) {
           const g = vocalGenero_(desiredName);
           const newLine = `${g.art} ${g.senor} Vocal ${g.doc} ${desiredName} dijo:`;
 
-          const before = vp.paragraph.getText() || "";
-          const esPlaceholder = voteLineRegexPlaceholder.test(before.trim());
 
-          if (esPlaceholder && norm(before) !== norm(newLine)) {
+
+          const before = vp.paragraph.getText() || "";
+
+          // Reescribe si el nombre actual NO coincide con el deseado (placeholder o normal)
+          if (norm(before) !== norm(newLine)) {
             vp.paragraph.setText(newLine);
 
             vp.paragraph.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
@@ -1029,15 +1728,10 @@ function applyVotersInSections_(doc, settings, log) {
             txt.setUnderline(true);
 
             log.push(makeChange_("VOTER_LINE_REWRITE", `Sección ${t} / Párrafo ${vp.index + 1}`, before, newLine, {
-              location: { container:"BODY", index: vp.index },
-              highlights: [
-                // marca el placeholder si estaba
-                { kind:"regex", re:"^El\\/La\\s+señor\\/a\\s+Vocal\\s+doctor\\/a[\\s\\S]*?,\\s*dijo:\\s*$", group:0 }
-              ],
               voter: desiredName
             }));
-
           } else {
+            // si ya coincide, solo formato
             vp.paragraph.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
             removeAllIndents_(vp.paragraph, vp.elementType);
 
@@ -1045,14 +1739,11 @@ function applyVotersInSections_(doc, settings, log) {
             txt.setBold(true);
             txt.setUnderline(true);
 
-            log.push(makeChange_(
-              "VOTER_LINE_FORMAT",
-              `Sección ${t} / Párrafo ${vp.index + 1}`,
-              "(línea existente preservada)",
-              "Aplicado negrita+subrayado y quitadas sangrías",
-              { paragraphIndex: vp.index, voter: desiredName }
-            ));
+            log.push(makeChange_("VOTER_LINE_FORMAT", `Sección ${t} / Párrafo ${vp.index + 1}`, "(ya estaba)", "Formato aplicado", {
+              voter: desiredName
+            }));
           }
+
         }
       } else {
         log.push(makeChange_(
@@ -2165,22 +2856,437 @@ function formatComment_(ch) {
 }
 
 
-// ====== INDENTS: FIX REAL (PÁRRAFO + LISTA) ======
 function removeAllIndents_(p, elementType) {
-  // Indents de párrafo (sirven también en list item, pero no alcanza)
+  // Indents de párrafo
   p.setIndentStart(0);
   p.setIndentEnd(0);
   p.setIndentFirstLine(0);
 
-  // Si es LIST_ITEM, bajamos nesting level (acá estaba el bug)
+  // Si es LIST_ITEM, bajamos nesting level
   if (elementType === DocumentApp.ElementType.LIST_ITEM) {
-    try {
-      p.asListItem().setNestingLevel(0);
-    } catch (e) {}
+    try { p.asListItem().setNestingLevel(0); } catch (e) {}
   }
+
+  // ✅ NUEVO: si hay TAB dentro del texto, lo convierte a espacio (evita “sangría falsa”)
+  normalizeTabsInParagraph_(p);
 
   // Borrar tabs/espacios al inicio (incluye NBSP)
   trimLeadingWhitespace_(p);
+}
+
+function normalizeSrSra_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const DELIM = "(\\s|$|[\\.,;:!\\?\\)\\]\\u00BB\\u201D])";
+
+  const reSra = new RegExp("\\bSra\\.?"+DELIM, "ig");
+  const reSr  = new RegExp("\\bSr\\.?"+DELIM, "ig");
+
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, reSra, (m) => `señora${m[1] || ""}`);
+    touched += replaceInTextPreserveStyle_(textEl, reSr,  (m) => `señor${m[1] || ""}`);
+  });
+
+  return touched;
+}
+
+
+function normalizeLicenciadoConditional_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+
+  const DELIM = "(\\s|$|[\\.,;:!\\?\\)\\]\\u00BB\\u201D])";
+  const reLic = new RegExp("\\blic\\.?"+DELIM, "ig");
+
+  forEachText_(body, (textEl) => {
+    touched += replaceInTextPreserveStyle_(textEl, reLic, (m, full) => {
+      const idx = m.index;
+      const before = (full || "").slice(Math.max(0, idx - 40), idx).toLowerCase();
+
+      // tolera coma/punto antes de Lic: “señor, Lic.” / “la Lic.”
+      const female = /\b(la|señora|sra)\b[\s,;:.]*$/.test(before);
+      const male   = /\b(el|señor|sr)\b[\s,;:.]*$/.test(before);
+
+      const delim = m[1] || "";
+
+      if (female) return `licenciada${delim}`;
+      if (male)   return `licenciado${delim}`;
+
+      // Si no hay pista, elegí tu default:
+      // (a) conservador: no tocar
+      // return m[0];
+
+      // (b) default masculino:
+      return `licenciado${delim}`;
+    });
+  });
+
+  return touched;
+}
+
+function stripAccents_(s) {
+  try {
+    return (s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  } catch (e) {
+    return (s || "");
+  }
+}
+
+/**
+ * Convierte números en palabras (español) a número.
+ * Soporta lo que te aparece en sentencias: 1..9999 aprox (incluye "dos mil veinticuatro", "setenta y tres", etc.)
+ * Devuelve number o null si no puede parsear.
+ */
+function wordsToNumberEs_(words) {
+  if (!words) return null;
+
+  let s = stripAccents_((words + "").toLowerCase())
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!s) return null;
+  if (/^\d+$/.test(s)) return parseInt(s, 10);
+
+  const U = { cero:0, un:1, uno:1, una:1, dos:2, tres:3, cuatro:4, cinco:5, seis:6, siete:7, ocho:8, nueve:9 };
+  const T10 = { diez:10, once:11, doce:12, trece:13, catorce:14, quince:15, dieciseis:16, diecisiete:17, dieciocho:18, diecinueve:19 };
+  const D = { veinte:20, treinta:30, cuarenta:40, cincuenta:50, sesenta:60, setenta:70, ochenta:80, noventa:90 };
+  const C = { cien:100, ciento:100, doscientos:200, trescientos:300, cuatrocientos:400, quinientos:500, seiscientos:600, setecientos:700, ochocientos:800, novecientos:900 };
+
+  const toks = s.split(" ");
+  let total = 0;
+  let cur = 0;
+
+  for (let i = 0; i < toks.length; i++) {
+    const tok = toks[i];
+    if (!tok || tok === "y") continue;
+
+    // veintidos / veintitres / veinticuatro...
+    if (tok.startsWith("veinti") && tok !== "veinte" && tok !== "veinti" && tok.length > 6) {
+      const rest = tok.slice(6);
+      const u = (U[rest] != null) ? U[rest] : ((rest === "un" || rest === "uno") ? 1 : null);
+      if (u == null) return null;
+      cur += 20 + u;
+      continue;
+    }
+    if (tok === "veinti") { cur += 20; continue; } // “veinti cuatro”
+
+    // dieciseis / diecisiete / ...
+    if (tok.startsWith("dieci") && tok.length > 5) {
+      const rest = tok.slice(5);
+      const u = U[rest];
+      if (u == null) return null;
+      cur += 10 + u;
+      continue;
+    }
+
+    if (tok === "mil") {
+      total += (cur || 1) * 1000;
+      cur = 0;
+      continue;
+    }
+
+    if (C[tok] != null) { cur += C[tok]; continue; }
+    if (D[tok] != null) { cur += D[tok]; continue; }
+    if (T10[tok] != null) { cur += T10[tok]; continue; }
+    if (U[tok] != null) { cur += U[tok]; continue; }
+
+    return null;
+  }
+
+  return total + cur;
+}
+
+/** Pone en negrita SOLO el prefijo "I." (con punto). */
+function boldRomanNumeralIPrefix_(paragraph) {
+  const s = (paragraph.getText() || "");
+  if (!s) return 0;
+
+  // solo si arranca con I. (permitimos espacios antes)
+  if (!/^\s*I\./.test(s)) return 0;
+
+  const start = s.search(/I\./);
+  if (start === -1) return 0;
+
+  try {
+    const t = paragraph.editAsText();
+    t.setBold(start, start + 1, true);       // "I."
+    t.setItalic(start, start + 1, false);
+    t.setUnderline(start, start + 1, false);
+    return 1;
+  } catch (e) {
+    return 0;
+  }
+}
+
+
+function normalizeTabsInParagraph_(p) {
+  try {
+    const t = p.editAsText();
+    const s = t.getText() || "";
+    if (!s || s.indexOf("\t") === -1) return 0;
+
+    // Reemplaza cualquier cantidad de tabs por 1 espacio
+    return replaceInTextPreserveStyle_(t, /\t+/g, " ");
+  } catch (e) {
+    return 0;
+  }
+}
+
+function fixFirstQuestionIntroSentenciaI_(doc, log) {
+  const body = doc.getBody();
+  const n = body.getNumChildren();
+
+  const rxPrimera = /^\s*A\s+LA\s+PRIMERA\s+CUESTI[ÓO]N\b/i;
+  const rxSeccion = /^\s*A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N\b/i;
+
+  // 1) encontrar el heading de PRIMERA CUESTIÓN
+  let idxPrimera = -1;
+  for (let i = 0; i < n; i++) {
+    const el = body.getChild(i);
+    if (el.getType() !== DocumentApp.ElementType.PARAGRAPH &&
+        el.getType() !== DocumentApp.ElementType.LIST_ITEM) continue;
+
+    const p = elementToParagraphOrListItem_(el);
+    const t = (p.getText() || "").trim();
+    if (rxPrimera.test(t)) { idxPrimera = i; break; }
+  }
+
+  if (idxPrimera === -1) {
+    log && log.push(makeChange_("FIRSTQ_I_SENTENCIA", "Documento", "No encontré A LA PRIMERA CUESTIÓN", "Sin cambios", {}));
+    return;
+  }
+
+  // 2) buscar el primer párrafo después que empiece con I. y tenga “Sentencia” cerca del inicio
+  let targetEl = null;
+  let targetP = null;
+  let targetIndex = -1;
+
+  for (let i = idxPrimera + 1; i < n; i++) {
+    const el = body.getChild(i);
+
+    if (el.getType() !== DocumentApp.ElementType.PARAGRAPH &&
+        el.getType() !== DocumentApp.ElementType.LIST_ITEM) continue;
+
+    const p = elementToParagraphOrListItem_(el);
+    const raw = (p.getText() || "");
+    const t = raw.trim();
+    if (!t) continue;
+
+    // si ya entramos a otra sección, cortamos
+    if (rxSeccion.test(t)) break;
+
+    // condición: empieza con I. (o I)) y “Sentencia” está “ahí nomás” (en los primeros ~80 chars)
+    const startsI = /^\s*I\s*[\.\)]/.test(raw);
+    const posSent = raw.toLowerCase().indexOf("sentencia");
+    if (startsI && posSent !== -1 && posSent <= 80) {
+      targetEl = el;
+      targetP = p;
+      targetIndex = i;
+      break;
+    }
+  }
+
+  if (!targetP) {
+    log && log.push(makeChange_("FIRSTQ_I_SENTENCIA", `Body párrafo ${idxPrimera + 1}`, "No encontré párrafo I. con Sentencia", "Sin cambios", {}));
+    return;
+  }
+
+  const before = targetP.getText() || "";
+  let after = canonicalizeFirstQuestionIText_(before);
+
+  // nada para hacer
+  if (!after || after === before) {
+    // igual aplicamos formato de comillas (por si venía mal)
+    const allLen = (targetP.getText() || "").length;
+    if (allLen > 0) {
+      const tAll = targetP.editAsText();
+      tAll.setBold(0, allLen - 1, false);
+      tAll.setItalic(0, allLen - 1, false);
+      tAll.setUnderline(0, allLen - 1, false);
+    }
+    const q = italicizeQuotedTextNoBold_(targetP);
+    boldRomanNumeralIPrefix_(targetP);
+
+
+    log && log.push(makeChange_("FIRSTQ_I_SENTENCIA", `Body párrafo ${targetIndex + 1}`, "(sin cambios)", `Comillas en cursiva/no negrita: ${q}`, {}));
+    return;
+  }
+
+  // 3) reescribir texto
+  targetP.setText(after);
+
+  // 4) estilo consistente
+  targetP.setAlignment(DocumentApp.HorizontalAlignment.JUSTIFY);
+  removeAllIndents_(targetP, targetEl.getType());
+  targetP.setLineSpacing(1.5);
+  targetP.setSpacingBefore(0);
+  targetP.setSpacingAfter(0);
+
+  const tt = targetP.editAsText();
+  tt.setFontFamily("Times New Roman");
+  tt.setFontSize(12);
+  clearUnderline_(targetP);
+
+  // 5) Dejar el párrafo “normal” (sin negrita/cursiva/subrayado)
+  const allLen = (targetP.getText() || "").length;
+  if (allLen > 0) {
+    const tAll = targetP.editAsText();
+    tAll.setBold(0, allLen - 1, false);
+    tAll.setItalic(0, allLen - 1, false);
+    tAll.setUnderline(0, allLen - 1, false);
+  }
+
+  // 6) Comillas: todo lo entre comillas -> cursiva y sin negrita
+  const qCount = italicizeQuotedTextNoBold_(targetP);
+  boldRomanNumeralIPrefix_(targetP);
+
+
+}
+
+function canonicalizeFirstQuestionIText_(txt) {
+  if (!txt) return txt;
+
+  // Limpieza básica (incluye tabs)
+  txt = txt
+    .replace(/[\t\u00A0]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  // I. (normaliza “I)”, “I .”, etc.)
+  txt = txt.replace(/^\s*I\s*[\.\)]\s*/i, "I. ");
+
+  // I. Por Sentencia ...
+  txt = txt.replace(/^I\.\s*Por\s+sentencia\b/i, "I. Por Sentencia");
+
+  // Asegurar: Sentencia n° <num>
+  // (acepta N°, Nº, nro, número, etc.)
+  txt = txt.replace(
+    /\bSentencia\s*(?:n[°ºo]\.?|nº|n°|N°|Nº|nro\.?|Nro\.?|número)\s*([0-9]{1,4})\b/i,
+    (m, num) => `Sentencia n° ${num}`
+  );
+
+  // fallback: “Sentencia 16” -> “Sentencia n° 16”
+  txt = txt.replace(
+    /\bSentencia\s+([0-9]{1,4})\b/i,
+    (m, num) => `Sentencia n° ${num}`
+  );
+
+  // Fecha: del/de fecha dd/mm/yyyy -> del/de fecha d de mes de yyyy
+  txt = txt.replace(
+    /\b(del|de fecha)\s+(\d{1,2})\s*[\/-]\s*(\d{1,2})\s*[\/-]\s*(\d{4})\b/i,
+    (m, pref, dd, mm, yyyy) => {
+      const d = parseInt(dd, 10);
+      const mo = parseInt(mm, 10);
+      return `${pref.toLowerCase()} ${d} de ${monthNameEs_(mo)} de ${yyyy}`;
+    }
+  );
+
+  // Si ya está “del 1 de enero de 2001”, dejamos pero normalizamos minúsculas de mes
+  txt = txt.replace(
+    /\b(del|de fecha)\s+(\d{1,2})\s+de\s+([a-záéíóúñ]+)\s+de\s+(\d{4})\b/i,
+    (m, pref, dd, mes, yyyy) => {
+      const d = parseInt(dd, 10);
+      return `${pref.toLowerCase()} ${d} de ${mes.toLowerCase()} de ${yyyy}`;
+    }
+  );
+
+  // Nominación en letras (de/del 3ra Nominación -> de Tercera Nominación)
+  txt = normalizeNominacionEnLetras_(txt);
+
+  // Extra: si viene “Cámara 3ra Nominación” sin “de”, lo arreglamos a “Cámara de Tercera Nominación”
+  txt = txt.replace(
+    /\b(c[aá]mara|juzgado)\s+(\d{1,2})\s*(?:ª|º|°|a|A|ra|RA)?\s+Nominaci[óo]n\b/ig,
+    (m, trib, numStr) => {
+      const n = parseInt(numStr, 10);
+      const T = trib.toLowerCase().startsWith("c") ? "Cámara" : "Juzgado";
+      return `${T} de ${ordinalFemenino_(n)} Nominación`;
+    }
+  );
+
+  // ✅ NUEVO: "Sentencia número setenta y tres" -> "Sentencia n° 73" (y Auto)
+  txt = txt.replace(
+    /\b(Sentencia|Auto)\s+n[úu]mero\s+([a-záéíóúñ\s]+?)(\s+(?:el|del|de\s+fecha)\b|[.,;:\)\]])/ig,
+    (m, tipo, numWords, delim) => {
+      const n = wordsToNumberEs_(numWords);
+      if (n == null) return m;
+      const T = tipo[0].toUpperCase() + tipo.slice(1).toLowerCase();
+      return `${T} n° ${n}${delim}`;
+    }
+  );
+
+  // ✅ NUEVO: "el ocho de octubre de dos mil veinticuatro" -> "el 8 de octubre de 2024"
+  txt = txt.replace(
+    /\b(el|del|de fecha)\s+([a-záéíóúñ0-9\s]{1,30})\s+de\s+([a-záéíóúñ]+)\s+de\s+([a-záéíóúñ0-9\s]{2,60})\b/ig,
+    (m, pref, dayStr, mes, yearStr) => {
+      const dRaw = (dayStr || "").trim();
+      const yRaw = (yearStr || "").trim();
+
+      const day = /^\d{1,2}$/.test(dRaw) ? parseInt(dRaw, 10) : wordsToNumberEs_(dRaw);
+      const year = /^\d{4}$/.test(yRaw) ? parseInt(yRaw, 10) : wordsToNumberEs_(yRaw);
+
+      if (day == null || day < 1 || day > 31) return m;
+      if (year == null || year < 1000 || year > 2999) return m;
+
+      return `${pref.toLowerCase()} ${day} de ${mes.toLowerCase()} de ${year}`;
+    }
+  );
+
+
+  // Limpieza final
+  txt = txt
+    .replace(/\s+,/g, ",")
+    .replace(/\s+\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
+  return txt;
+}
+
+function italicizeQuotedTextNoBold_(paragraph) {
+  const t = paragraph.editAsText();
+  const full = paragraph.getText() || "";
+  if (!full) return 0;
+
+  const OPEN  = ['"', '“', '«'];
+  const CLOSE = ['"', '”', '»'];
+
+  let from = 0;
+  let count = 0;
+
+  while (from < full.length) {
+    // buscar próxima comilla de apertura (cualquiera)
+    let i1 = -1;
+    for (const ch of OPEN) {
+      const idx = full.indexOf(ch, from);
+      if (idx !== -1 && (i1 === -1 || idx < i1)) i1 = idx;
+    }
+    if (i1 === -1) break;
+
+    // buscar próximo cierre (cualquiera) después de i1
+    let i2 = -1;
+    for (const ch of CLOSE) {
+      const idx = full.indexOf(ch, i1 + 1);
+      if (idx !== -1 && (i2 === -1 || idx < i2)) i2 = idx;
+    }
+    if (i2 === -1) break;
+
+    const start = i1 + 1;
+    const end = i2 - 1;
+
+    if (end >= start) {
+      try {
+        t.setItalic(start, end, true);
+        t.setBold(start, end, false);
+      } catch (e) {}
+      count++;
+    }
+
+    from = i2 + 1;
+  }
+
+  return count;
 }
 
 function trimLeadingWhitespace_(p) {
@@ -2209,7 +3315,6 @@ function vocalGenero_(nombre) {
     ? { art: "La", senor: "señora", doc: "doctora" }
     : { art: "El", senor: "señor", doc: "doctor" };
 }
-
 
 // ----------------- CORE (recorre párrafos y aplica regex con grupos) -----------------
 
@@ -2318,8 +3423,6 @@ function highlightInText_(text, rule) {
 
   return count;
 }
-
-
 
 // ====== UTIL ======
 function makeChange_(ruleId, scope, beforeText, afterText, extra) {

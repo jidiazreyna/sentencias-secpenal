@@ -978,14 +978,44 @@ function exportGoogleDocToDocx_(googleDocFileId, outFolder, outName) {
 }
 
 
+function runWithRateLimitRetry_(label, fn, maxAttempts) {
+  const attempts = maxAttempts || 5;
+  let lastErr = null;
+
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return fn();
+    } catch (e) {
+      lastErr = e;
+      if (!isRateLimitExceededError_(e) || i === attempts) throw e;
+      const waitMs = Math.min(16000, 500 * Math.pow(2, i - 1)) + Math.floor(Math.random() * 250);
+      Utilities.sleep(waitMs);
+    }
+  }
+
+  throw lastErr || new Error(`Fallo en ${label || "operación"}`);
+}
+
+function isRateLimitExceededError_(e) {
+  const msg = String(e || "").toLowerCase();
+  return msg.includes("user rate limit exceeded") ||
+    msg.includes("rate limit exceeded") ||
+    msg.includes("too many requests") ||
+    msg.includes("response code 429") ||
+    msg.includes("http 429");
+}
+
+
 
 // ====== CONVERSIÓN ESTABLE ======
 function convertDocxToGoogleDoc_(fileId, title, outFolder, log) {
   try {
-    const copied = Drive.Files.copy(
-      { title: title, mimeType: GDOC_MIME },
-      fileId,
-      { convert: true }
+    const copied = runWithRateLimitRetry_("convert_docx_to_gdoc", () =>
+      Drive.Files.copy(
+        { title: title, mimeType: GDOC_MIME },
+        fileId,
+        { convert: true }
+      )
     );
 
     if (copied.mimeType !== GDOC_MIME) {

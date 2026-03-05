@@ -188,7 +188,7 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
 
     try {
       // Si el emparejamiento fue débil, resaltar completo evita “ruido” palabra por palabra.
-      if ((pair.score || 0) < 0.35) {
+      if ((pair.score || 0) < 0.22) {
         touched += markWholeTextAsChanged_(leftText, sA);
       } else {
         touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
@@ -218,8 +218,8 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
 
   const out = [];
   let j = 0;
-  const LOOKAHEAD = 12;
-  const MIN_MATCH_SCORE = 0.52;
+  const LOOKAHEAD = 20;
+  const MIN_MATCH_SCORE = 0.45;
 
   for (let i = 0; i < left.length; i++) {
     const leftText = left[i];
@@ -656,13 +656,21 @@ function normalizeLeyNumero_(doc) {
 function normalizeFiscalCase_(doc) {
   const body = doc.getBody();
   let touched = 0;
-  const re = /\bFiscal\b/g;
+
+  const reFiscalCamara = /\bFiscal\s+de\s+C[áa]mara\b/ig;
+  const reFiscalInstruccion = /\bFiscal\s+de\s+Instrucci[oó]n\b/ig;
+  const reFiscal = /\bFiscal\b/g;
+
   forEachText_(body, (textEl) => {
-    touched += replaceInTextPreserveStyle_(textEl, re, (m, full) => {
+    touched += replaceInTextPreserveStyle_(textEl, reFiscalCamara, "fiscal de cámara");
+    touched += replaceInTextPreserveStyle_(textEl, reFiscalInstruccion, "fiscal de instrucción");
+
+    touched += replaceInTextPreserveStyle_(textEl, reFiscal, (m, full) => {
       const tail = (full || "").slice(m.index, m.index + 30);
       return /^Fiscal\s+General\b/.test(tail) ? "Fiscal" : "fiscal";
     });
   });
+
   return touched;
 }
 
@@ -2802,8 +2810,11 @@ function tokenizeWords_(s) {
 function normForMatch_(s) {
   return (s || "")
     .toLowerCase()
+    .replace(/\u00a0/g, " ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
-    .replace(/[“”«»"']/g, "")
     .trim();
 }
 

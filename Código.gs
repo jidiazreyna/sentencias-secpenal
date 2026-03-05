@@ -902,6 +902,12 @@ function normalizeFirstParagraphFlow_(txt) {
     (m, art) => `, en contra ${art.toLowerCase()} `
   );
 
+  // 3.b) Variante equivalente: ". Este recurso se presenta en contra ..." -> ", en contra ..."
+  txt = txt.replace(
+    /[.,]\s*Este\s+recurso\s+se\s+presenta\s+en\s+contra\s+(del|de la|de los|de las)\s+/ig,
+    (m, art) => `, en contra ${art.toLowerCase()} `
+  );
+
   // 1) Caso especial: si antes hay iniciales tipo "R.A.M." mantenemos el punto y agregamos coma.
   txt = txt.replace(
     /((?:[A-ZÁÉÍÓÚÑ]\.){2,})\s*Se\s+(?:presenta|interpone|deduce|plantea|articula|formula|promueve|dirige)\s+en\s+contra\s+de\s+/g,
@@ -1780,7 +1786,7 @@ function applyVotersInSections_(doc, settings, log) {
 
   // Caso plantilla con placeholders (robusto)
   const voteLineRegexPlaceholder =
-    /^El\s*\/\s*La\s+(?:señor|senor)\s*\/\s*a\s+Vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
+    /^(?:El\s*\/\s*La|La\s*\/\s*El)\s+(?:señor|senor)\s*\/\s*a\s+vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
   // FIX #1: placeholders con puntos/guiones/espacios: "........ dijo:" / "— dijo:"
   const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃·…\s]{2,})\s*dijo\s*:\s*$/i;
   const voteLineRegexDijoOnly = /^\s*dijo\s*:\s*$/i;
@@ -3160,7 +3166,7 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
     if (rxSeccion.test(t)) break;
 
     // condición: empieza con I. (o I)) y “Sentencia” está “ahí nomás” (en los primeros ~80 chars)
-    const startsI = /^\s*I\s*[\.\)]/.test(raw);
+    const startsI = /^\s*I\s*[\.\)\-]/.test(raw);
     const posSent = raw.toLowerCase().indexOf("sentencia");
     if (startsI && posSent !== -1 && posSent <= 80) {
       targetEl = el;
@@ -3237,7 +3243,7 @@ function canonicalizeFirstQuestionIText_(txt) {
     .trim();
 
   // I. (normaliza “I)”, “I .”, etc.)
-  txt = txt.replace(/^\s*I\s*[\.\)]\s*/i, "I. ");
+  txt = txt.replace(/^\s*I\s*[\.\)\-]\s*/i, "I. ");
 
   // I. Por Sentencia ...
   txt = txt.replace(/^I\.\s*Por\s+sentencia\b/i, "I. Por Sentencia");

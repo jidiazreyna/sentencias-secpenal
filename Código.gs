@@ -2777,12 +2777,34 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
   // colores: eliminaciones/reemplazos (rojo claro)
   const RED = "#ffd6d6";
 
-  const A = tokenizeWords_(originalStr);
-  const B = tokenizeWords_(correctedStr);
+  const normTok = (w) => (w || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 
-  const ops = myersDiff_(A.map(x => x.w), B.map(x => x.w));
+  // ⚠️ Comparar solo palabras/números (no puntuación) para no “pintar todo rojo"
+  // por cambios menores de signos o espacios.
+  const A = tokenizeWords_(originalStr)
+    .filter(t => /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]/.test(t.w))
+    .map(t => ({ ...t, nw: normTok(t.w) }))
+    .filter(t => t.nw.length > 0);
 
-  // ops: [{type:'equal'|'delete'|'insert', a0,a1,b0,b1}]
+  const B = tokenizeWords_(correctedStr)
+    .filter(t => /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]/.test(t.w))
+    .map(t => ({ ...t, nw: normTok(t.w) }))
+    .filter(t => t.nw.length > 0);
+
+  if (!A.length || !B.length) return 0;
+
+  const ops = myersDiff_(A.map(x => x.nw), B.map(x => x.nw));
+
+  // Si el bloque cambió demasiado, evitamos un “manchón rojo” poco útil.
+  let deletedWords = 0;
+  for (const op of ops) {
+    if (op.type === "delete") deletedWords += (op.a1 - op.a0);
+  }
+  if ((deletedWords / Math.max(1, A.length)) > 0.7) return 0;
+
   // resaltar deletes en el original
   let marks = 0;
 
@@ -2792,7 +2814,6 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
     const endTok = A[op.a1 - 1];
     if (!startTok || !endTok) continue;
 
-    // solo resaltar “cosas reales” (no espacios solos)
     const span = originalStr.slice(startTok.s, endTok.e);
     if (!span.trim()) continue;
 

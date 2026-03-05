@@ -184,7 +184,10 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
       continue;
     }
 
-    if (normForMatch_(sA) === normForMatch_(sB)) continue;
+    // Para comparación visual conviene detectar cambios exactos de texto
+    // (incluye mayúsculas, tildes, signos y abreviaturas), no solo por
+    // normalización “semántica”. Si no, se pierden muchos resaltados.
+    if (canonicalTextForComparison_(sA) === canonicalTextForComparison_(sB)) continue;
 
     try {
       // Si el emparejamiento fue débil y no hay solapamiento real, resaltar completo.
@@ -2861,7 +2864,7 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
 
   // Fallback: si el texto cambió pero no hubo rangos concretos (casos límite de tokenización),
   // marcamos el bloque completo para no perder cambios en el comparativo.
-  if (!marks && normForMatch_(originalStr) !== normForMatch_(correctedStr)) {
+  if (!marks && canonicalTextForComparison_(originalStr) !== canonicalTextForComparison_(correctedStr)) {
     marks += markWholeTextAsChanged_(textEl, originalStr || "");
   }
 
@@ -2889,6 +2892,13 @@ function normForMatch_(s) {
     .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .replace(/[“”«»"']/g, "")
+    .trim();
+}
+
+function canonicalTextForComparison_(s) {
+  return (s || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 

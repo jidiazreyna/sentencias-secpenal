@@ -43,7 +43,7 @@ function listInputFiles() {
   return out;
 }
 
-// Comparación visual: se mantiene el DOCX corregido y se agrega un GDoc con marcas.
+// Reporte de errores: se mantiene el DOCX corregido y se agrega un GDoc con marcas.
 
 function copyBodyToCellPreserveFormat_(srcBody, dstCell) {
   const n = srcBody.getNumChildren();
@@ -143,7 +143,7 @@ function correctDocx(fileId, settings) {
       "COMPARISON_DOC_ERROR",
       "Documento comparativo",
       "",
-      `No se pudo generar comparación visual: ${String(e)}`,
+      `No se pudo generar reporte de errores: ${String(e)}`,
       {}
     ));
   }

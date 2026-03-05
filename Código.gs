@@ -1248,6 +1248,7 @@ function isFirstParagraphCanonical_(txt, settings) {
   const s = (txt || "")
     .replace(/[\t\u00A0]/g, " ")
     .replace(/\s+/g, " ")
+    .replace(/[“”«»"']/g, "")
     .trim();
 
   const hasCause = /\b(emitir[aá]|emite)\s+sentencia\s+en\s+(los\s+autos|la\s+causa)\b/i.test(s);

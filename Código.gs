@@ -212,6 +212,16 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
     const aNorm = normForMatch_(aText);
     if (!aNorm) continue;
 
+    // Anclas para secciones repetitivas: evita corrimientos cerca del cierre.
+    // Si se desalinea una cabecera estructural, los párrafos siguientes quedan
+    // sobre-resaltados aunque el texto sea correcto.
+    const forced = findAnchoredMatchIndex_(aNorm, right, j);
+    if (forced !== -1) {
+      out.push({ left: left[i], right: right[forced] });
+      j = forced + 1;
+      continue;
+    }
+
     let best = -1;
     let bestScore = -1;
     const lim = Math.min(right.length - 1, j + LOOKAHEAD);
@@ -241,6 +251,31 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   }
 
   return out;
+}
+
+function findAnchoredMatchIndex_(leftNorm, rightArr, startIdx) {
+  const anchors = [
+    "a la segunda cuestion",
+    "resuelve",
+    "protocolicese"
+  ];
+
+  const isAnchor = anchors.some((a) => leftNorm.indexOf(a) !== -1);
+  if (!isAnchor) return -1;
+
+  const MAX_SCAN = 60;
+  const lim = Math.min(rightArr.length - 1, startIdx + MAX_SCAN);
+  for (let k = startIdx; k <= lim; k++) {
+    const rNorm = normForMatch_(rightArr[k].getText() || "");
+    if (rNorm === leftNorm) return k;
+  }
+
+  for (let k = startIdx; k <= lim; k++) {
+    const rNorm = normForMatch_(rightArr[k].getText() || "");
+    if (anchors.some((a) => rNorm.indexOf(a) !== -1)) return k;
+  }
+
+  return -1;
 }
 
 function collectEditableTextElements_(body) {

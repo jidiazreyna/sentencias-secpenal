@@ -221,6 +221,8 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   let j = 0;
   const LOOKAHEAD = 40;
   const MIN_MATCH_SCORE = 0.33;
+  const NEAR_WINDOW = 8;
+  const HIGH_CONFIDENCE_SCORE = 0.72;
 
   for (let i = 0; i < left.length; i++) {
     const leftText = left[i];
@@ -238,6 +240,7 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
 
     let best = -1;
     let bestScore = -1;
+    let bestAdjustedScore = -1;
     const lim = Math.min(right.length - 1, j + LOOKAHEAD);
 
     for (let k = j; k <= lim; k++) {
@@ -251,8 +254,20 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
       }
 
       const score = diceCoef_(aNorm, bNorm);
-      if (score > bestScore) {
+      const distancePenalty = (k - j) * 0.015;
+      const adjustedScore = score - distancePenalty;
+
+      // Evita saltos largos cuando ya encontramos un match cercano muy fuerte.
+      if ((k - j) <= NEAR_WINDOW && score >= HIGH_CONFIDENCE_SCORE) {
+        best = k;
         bestScore = score;
+        bestAdjustedScore = adjustedScore;
+        break;
+      }
+
+      if (adjustedScore > bestAdjustedScore) {
+        bestScore = score;
+        bestAdjustedScore = adjustedScore;
         best = k;
       }
     }

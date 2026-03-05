@@ -219,8 +219,8 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
 
   const out = [];
   let j = 0;
-  const LOOKAHEAD = 20;
-  const MIN_MATCH_SCORE = 0.45;
+  const LOOKAHEAD = 40;
+  const MIN_MATCH_SCORE = 0.33;
 
   for (let i = 0; i < left.length; i++) {
     const leftText = left[i];
@@ -257,7 +257,11 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
       }
     }
 
-    if (best === -1 || bestScore < MIN_MATCH_SCORE) {
+    const bestRightText = best >= 0 ? (right[best].getText() || "") : "";
+    const canUseLowScoreMatch =
+      best >= 0 && hasReasonableWordOverlap_(leftText.getText() || "", bestRightText);
+
+    if (best === -1 || (bestScore < MIN_MATCH_SCORE && !canUseLowScoreMatch)) {
       // No avanzamos j: el siguiente párrafo de base podría emparejar mejor con el mismo derecho.
       out.push({ left: leftText, right: null, score: bestScore < 0 ? 0 : bestScore });
       continue;
@@ -2798,12 +2802,13 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
 
   const ops = myersDiff_(A.map(x => x.nw), B.map(x => x.nw));
 
-  // Si el bloque cambió demasiado, evitamos un “manchón rojo” poco útil.
+  // Si el bloque cambió demasiado, evitamos un “manchón rojo” poco útil,
+  // pero dejamos un umbral alto para no perder resaltado de cambios reales.
   let deletedWords = 0;
   for (const op of ops) {
     if (op.type === "delete") deletedWords += (op.a1 - op.a0);
   }
-  if ((deletedWords / Math.max(1, A.length)) > 0.7) return 0;
+  if ((deletedWords / Math.max(1, A.length)) > 0.9) return 0;
 
   // resaltar deletes en el original
   let marks = 0;

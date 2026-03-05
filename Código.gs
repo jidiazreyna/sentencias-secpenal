@@ -201,34 +201,40 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   const right = collectEditableTextElements_(bodyCorrected);
   const out = [];
 
-  let i = 0;
   let j = 0;
-  const LOOKAHEAD = 4;
+  const LOOKAHEAD = 25;
+  const MIN_SIMILARITY = 0.45;
 
-  for (; i < left.length; i++) {
+  for (let i = 0; i < left.length; i++) {
     if (j >= right.length) break;
 
     const aText = left[i].getText() || "";
     const aNorm = normForMatch_(aText);
+    if (!aNorm) continue;
 
-    let best = j;
+    let best = -1;
     let bestScore = -1;
     const lim = Math.min(right.length - 1, j + LOOKAHEAD);
 
     for (let k = j; k <= lim; k++) {
       const bNorm = normForMatch_(right[k].getText() || "");
       if (!bNorm) continue;
+
       if (aNorm === bNorm) {
         best = k;
         bestScore = 1;
         break;
       }
+
       const score = diceCoef_(aNorm, bNorm);
       if (score > bestScore) {
         bestScore = score;
         best = k;
       }
     }
+
+    // Evita desalinear todo el resto del documento por un match malo.
+    if (best === -1 || bestScore < MIN_SIMILARITY) continue;
 
     out.push({ left: left[i], right: right[best] });
     j = best + 1;

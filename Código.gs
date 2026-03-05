@@ -187,8 +187,9 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
     if (normForMatch_(sA) === normForMatch_(sB)) continue;
 
     try {
-      // Si el emparejamiento fue débil, resaltar completo evita “ruido” palabra por palabra.
-      if ((pair.score || 0) < 0.22) {
+      // Si el emparejamiento fue débil y no hay solapamiento real, resaltar completo.
+      // Si hay solapamiento, intentamos diff para evitar “todo el párrafo en rojo”.
+      if ((pair.score || 0) < 0.22 && !hasReasonableWordOverlap_(sA, sB)) {
         touched += markWholeTextAsChanged_(leftText, sA);
       } else {
         touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
@@ -361,19 +362,9 @@ function applyGeneralNormalizations_(doc, log) {
   R("\\bn\\s*°\\b", "n°");
 
   // =========================
-  // C) Si antes viene sentencia/auto/decreto/resolución/dictamen -> Capitalizar + "n°"
+  // C) sentencia/auto/decreto/resolución + n° + número -> Capitalizar
   // =========================
-  R("\\bsentencia\\s+n°\\b", "Sentencia n°");
-  R("\\bauto\\s+n°\\b", "Auto n°");
-  R("\\bdecreto\\s+n°\\b", "Decreto n°");
-  R("\\bresoluci[oó]n\\s+n°\\b", "Resolución n°");
-  R("\\bdictamen\\s+n°\\b", "Dictamen n°");
-
-  R("\\bSENTENCIA\\s+n°\\b", "Sentencia n°");
-  R("\\bAUTO\\s+n°\\b", "Auto n°");
-  R("\\bDECRETO\\s+n°\\b", "Decreto n°");
-  R("\\bRESOLUCI[ÓO]N\\s+n°\\b", "Resolución n°");
-  R("\\bDICTAMEN\\s+n°\\b", "Dictamen n°");
+  const cActoNum = normalizeActoNumeroCapitalization_(doc);
 
   // =========================
   // D) "Sala Penal" siempre así
@@ -455,10 +446,29 @@ function applyGeneralNormalizations_(doc, log) {
       "NEW_NORMALIZATIONS",
       "Documento completo",
       "",
-      `Aplicadas: decimoComp=${cDec || 0}, MP=${cMP || 0}, ordinales=${cOrd || 0}, tribunal=${cTri || 0}, vocal=${cVoc || 0}, sr/sra=${cSr||0}; lic=${cLic||0}; dr=${cDr||0}; TSJ=${cTSJ||0}; A/S no=${cANo||0}; Ley=${cLey||0}; fiscal=${cFiscal||0}; latin=${cLat||0}; SAC=${cSAC||0}.`,
+      `Aplicadas: decimoComp=${cDec || 0}, MP=${cMP || 0}, ordinales=${cOrd || 0}, tribunal=${cTri || 0}, vocal=${cVoc || 0}, sr/sra=${cSr||0}; lic=${cLic||0}; dr=${cDr||0}; acto+n°=${cActoNum||0}; TSJ=${cTSJ||0}; A/S no=${cANo||0}; Ley=${cLey||0}; fiscal=${cFiscal||0}; latin=${cLat||0}; SAC=${cSAC||0}.`,
       {}
     ));
   }
+}
+
+function normalizeActoNumeroCapitalization_(doc) {
+  const body = doc.getBody();
+  let touched = 0;
+  const rules = [
+    [/\bsentencia\s+n°\s+([0-9]+)\b/ig, (m) => `Sentencia n° ${m[1]}`],
+    [/\bauto\s+n°\s+([0-9]+)\b/ig, (m) => `Auto n° ${m[1]}`],
+    [/\bdecreto\s+n°\s+([0-9]+)\b/ig, (m) => `Decreto n° ${m[1]}`],
+    [/\bresoluci[oó]n\s+n°\s+([0-9]+)\b/ig, (m) => `Resolución n° ${m[1]}`]
+  ];
+
+  forEachText_(body, (textEl) => {
+    rules.forEach(([re, repl]) => {
+      touched += replaceInTextPreserveStyle_(textEl, re, repl);
+    });
+  });
+
+  return touched;
 }
 
 function normalizeDoctorTitles_(doc) {
@@ -2817,6 +2827,23 @@ function normForMatch_(s) {
     .replace(/\s+/g, " ")
     .replace(/[“”«»"']/g, "")
     .trim();
+}
+
+function hasReasonableWordOverlap_(a, b) {
+  const ta = (normForMatch_(a).match(/[a-z0-9]+/g) || []).filter(x => x.length > 2);
+  const tb = (normForMatch_(b).match(/[a-z0-9]+/g) || []).filter(x => x.length > 2);
+  if (!ta.length || !tb.length) return false;
+
+  const setB = Object.create(null);
+  for (const w of tb) setB[w] = true;
+
+  let common = 0;
+  for (const w of ta) {
+    if (setB[w]) common++;
+  }
+
+  const minLen = Math.min(ta.length, tb.length);
+  return common >= 3 || (common / minLen) >= 0.35;
 }
 
 function bigrams_(s) {

@@ -217,58 +217,91 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   const left = collectEditableTextElements_(bodyCompare);
   const right = collectEditableTextElements_(bodyCorrected);
 
+  const n = left.length;
+  const m = right.length;
   const out = [];
+
+  if (!n) return out;
+
+  const leftNorm = left.map((te) => normForMatch_(te.getText() || ""));
+  const rightNorm = right.map((te) => normForMatch_(te.getText() || ""));
+
+  const GAP_LEFT = -0.28;   // párrafo de base sin match (tender a evitarlo)
+  const GAP_RIGHT = -0.08;  // párrafo extra en corregido (más tolerante)
+  const MIN_MATCH_SCORE = 0.30;
+
+  // DP de alineación global (Needleman-Wunsch simplificado)
+  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
+
+  for (let i = n - 1; i >= 0; i--) dp[i][m] = dp[i + 1][m] + GAP_LEFT;
+  for (let j = m - 1; j >= 0; j--) dp[n][j] = dp[n][j + 1] + GAP_RIGHT;
+
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      const aNorm = leftNorm[i];
+      const bNorm = rightNorm[j];
+
+      let matchScore = -1e9;
+      if (aNorm && bNorm) {
+        const dice = diceCoef_(aNorm, bNorm);
+        const overlap = hasReasonableWordOverlap_(left[i].getText() || "", right[j].getText() || "");
+        if (dice >= MIN_MATCH_SCORE || overlap) {
+          // Recompensa por match. Damos un pequeño plus al overlap para párrafos largos.
+          matchScore = dp[i + 1][j + 1] + (dice * 2) + (overlap ? 0.12 : 0);
+        }
+      }
+
+      const skipLeft = dp[i + 1][j] + GAP_LEFT;
+      const skipRight = dp[i][j + 1] + GAP_RIGHT;
+
+      dp[i][j] = Math.max(matchScore, skipLeft, skipRight);
+    }
+  }
+
+  // Reconstrucción de la mejor alineación
+  let i = 0;
   let j = 0;
-  const LOOKAHEAD = 40;
-  const MIN_MATCH_SCORE = 0.33;
+  while (i < n && j < m) {
+    const aNorm = leftNorm[i];
+    const bNorm = rightNorm[j];
 
-  for (let i = 0; i < left.length; i++) {
-    const leftText = left[i];
-    const aNorm = normForMatch_(leftText.getText() || "");
+    let canMatch = false;
+    let dice = 0;
+    let overlap = false;
+    let matchVal = -1e9;
 
-    if (!aNorm) {
-      out.push({ left: leftText, right: null, score: 0 });
-      continue;
-    }
-
-    if (j >= right.length) {
-      out.push({ left: leftText, right: null, score: 0 });
-      continue;
-    }
-
-    let best = -1;
-    let bestScore = -1;
-    const lim = Math.min(right.length - 1, j + LOOKAHEAD);
-
-    for (let k = j; k <= lim; k++) {
-      const bNorm = normForMatch_(right[k].getText() || "");
-      if (!bNorm) continue;
-
-      if (aNorm === bNorm) {
-        best = k;
-        bestScore = 1;
-        break;
-      }
-
-      const score = diceCoef_(aNorm, bNorm);
-      if (score > bestScore) {
-        bestScore = score;
-        best = k;
+    if (aNorm && bNorm) {
+      dice = diceCoef_(aNorm, bNorm);
+      overlap = hasReasonableWordOverlap_(left[i].getText() || "", right[j].getText() || "");
+      canMatch = (dice >= MIN_MATCH_SCORE || overlap);
+      if (canMatch) {
+        matchVal = dp[i + 1][j + 1] + (dice * 2) + (overlap ? 0.12 : 0);
       }
     }
 
-    const bestRightText = best >= 0 ? (right[best].getText() || "") : "";
-    const canUseLowScoreMatch =
-      best >= 0 && hasReasonableWordOverlap_(leftText.getText() || "", bestRightText);
+    const skipLeft = dp[i + 1][j] + GAP_LEFT;
+    const skipRight = dp[i][j + 1] + GAP_RIGHT;
+    const best = dp[i][j];
 
-    if (best === -1 || (bestScore < MIN_MATCH_SCORE && !canUseLowScoreMatch)) {
-      // No avanzamos j: el siguiente párrafo de base podría emparejar mejor con el mismo derecho.
-      out.push({ left: leftText, right: null, score: bestScore < 0 ? 0 : bestScore });
+    if (canMatch && Math.abs(best - matchVal) <= 1e-9) {
+      out.push({ left: left[i], right: right[j], score: dice });
+      i++;
+      j++;
       continue;
     }
 
-    out.push({ left: leftText, right: right[best], score: bestScore });
-    j = best + 1;
+    if (Math.abs(best - skipRight) <= 1e-9) {
+      j++;
+      continue;
+    }
+
+    out.push({ left: left[i], right: null, score: 0 });
+    i++;
+  }
+
+  while (i < n) {
+    out.push({ left: left[i], right: null, score: 0 });
+    i++;
   }
 
   return out;

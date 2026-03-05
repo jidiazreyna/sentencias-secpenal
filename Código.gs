@@ -2577,6 +2577,8 @@ function diffChangedRangesInOriginal_(orig, corr) {
   const oTok = tokenizeWithOffsets_(orig);
   const cTok = tokenizePlain_(corr);
 
+  if (!oTok.length) return [];
+
   const oWords = oTok.map(x => x.t);
   const cWords = cTok;
 
@@ -2597,6 +2599,10 @@ function diffChangedRangesInOriginal_(orig, corr) {
     if (op.type === "delete") {
       const startTok = oIndex;
       const endTok = oIndex + op.count - 1;
+      if (!oTok[startTok] || !oTok[endTok]) {
+        oIndex += op.count;
+        continue;
+      }
 
       const startChar = oTok[startTok].start;
       const endChar = oTok[endTok].end;
@@ -2609,6 +2615,10 @@ function diffChangedRangesInOriginal_(orig, corr) {
     if (op.type === "replace") {
       const startTok = oIndex;
       const endTok = oIndex + op.delCount - 1;
+      if (!oTok[startTok] || !oTok[endTok]) {
+        oIndex += (op.delCount || 0);
+        continue;
+      }
 
       const startChar = oTok[startTok].start;
       const endChar = oTok[endTok].end;
@@ -2671,36 +2681,61 @@ function tokenizeWithOffsets_(s) {
  * Implementación pensada para textos “normales” (párrafos), no libros enteros.
  */
 function myersDiffOps_(a, b) {
-  const N = a.length, M = b.length;
-  const max = N + M;
-  const v = {};
-  v[1] = 0;
-  const trace = [];
+  // Nota: antes había una implementación Myers con estados indefinidos
+  // (NaN en d=0), lo que generaba diffs inestables y resaltados falsos.
+  // Para priorizar exactitud en párrafos jurídicos, usamos LCS clásico
+  // (token-level) y luego compactamos a equal/delete/insert/replace.
+  const N = a.length;
+  const M = b.length;
 
-  for (let d = 0; d <= max; d++) {
-    const vv = {};
-    for (let k = -d; k <= d; k += 2) {
-      let x;
-      if (k === -d || (k !== d && v[k - 1] < v[k + 1])) {
-        x = v[k + 1]; // down (insert)
+  if (!N && !M) return [];
+  if (!N) return [{ type: "insert", count: M }];
+  if (!M) return [{ type: "delete", count: N }];
+
+  const dp = Array.from({ length: N + 1 }, () => Array(M + 1).fill(0));
+
+  for (let i = N - 1; i >= 0; i--) {
+    for (let j = M - 1; j >= 0; j--) {
+      if (a[i] === b[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
       } else {
-        x = v[k - 1] + 1; // right (delete)
-      }
-      let y = x - k;
-
-      while (x < N && y < M && a[x] === b[y]) { x++; y++; }
-
-      vv[k] = x;
-      if (x >= N && y >= M) {
-        trace.push(vv);
-        return backtrackOps_(trace, a, b);
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
       }
     }
-    trace.push(vv);
-    Object.keys(vv).forEach(k => v[k] = vv[k]);
   }
 
-  return backtrackOps_(trace, a, b);
+  const ops = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < N && j < M) {
+    if (a[i] === b[j]) {
+      ops.push({ type: "equal" });
+      i++;
+      j++;
+      continue;
+    }
+
+    if (dp[i + 1][j] >= dp[i][j + 1]) {
+      ops.push({ type: "delete" });
+      i++;
+    } else {
+      ops.push({ type: "insert" });
+      j++;
+    }
+  }
+
+  while (i < N) {
+    ops.push({ type: "delete" });
+    i++;
+  }
+
+  while (j < M) {
+    ops.push({ type: "insert" });
+    j++;
+  }
+
+  return compactOps_(ops);
 }
 
 function backtrackOps_(trace, a, b) {

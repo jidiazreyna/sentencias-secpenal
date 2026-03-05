@@ -173,7 +173,7 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
     const sB = rightText.getText() || "";
 
     if (!sA || !sB) continue;
-    if (normForMatch_(sA) === normForMatch_(sB)) continue;
+    if (isEqualExceptLeadingIndent_(sA, sB)) continue;
 
     try {
       touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
@@ -2510,8 +2510,13 @@ function highlightWhole_(text, color) {
  * Importante: resalta SOLO el original, por eso evita marcar partes iguales.
  */
 function diffChangedRangesInOriginal_(orig, corr) {
-  const oTok = tokenizeWithOffsets_(orig);
-  const cTok = tokenizePlain_(corr);
+  const o = stripLeadingIndent_(orig);
+  const c = stripLeadingIndent_(corr);
+
+  if (o.content === c.content) return [];
+
+  const oTok = tokenizeWithOffsets_(o.content, o.indentLen);
+  const cTok = tokenizePlain_(c.content);
 
   if (!oTok.length) return [];
 
@@ -2571,7 +2576,7 @@ function diffChangedRangesInOriginal_(orig, corr) {
   }
 
   // Unir rangos muy pegados (evita “confetti”)
-  return mergeCloseRanges_(ranges, 2);
+  return mergeCloseRanges_(ranges, 1);
 }
 
 function mergeCloseRanges_(ranges, gap) {
@@ -2593,22 +2598,52 @@ function mergeCloseRanges_(ranges, gap) {
 }
 
 function tokenizePlain_(s) {
-  // palabras + signos importantes como tokens separados
+  return tokenizeWithOffsets_(s).map(x => x.t);
+}
+
+function tokenizeWithOffsets_(s, offset) {
+  const base = offset || 0;
+  const str = String(s || "");
   const out = [];
-  const rx = /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]+|[“”"«».,;:()¿?¡!\-–—]/g;
-  let m;
-  while ((m = rx.exec(s || "")) !== null) out.push(m[0].toLowerCase());
+  let i = 0;
+
+  while (i < str.length) {
+    const ch = str[i];
+    if (/\s/.test(ch)) {
+      i++;
+      continue;
+    }
+
+    const start = i;
+    if (isWordChar_(ch)) {
+      i++;
+      while (i < str.length && isWordChar_(str[i])) i++;
+    } else {
+      i++;
+      while (i < str.length && !/\s/.test(str[i]) && !isWordChar_(str[i])) i++;
+    }
+
+    out.push({ t: str.slice(start, i), start: base + start, end: base + i - 1 });
+  }
+
   return out;
 }
 
-function tokenizeWithOffsets_(s) {
-  const out = [];
-  const rx = /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]+|[“”"«».,;:()¿?¡!\-–—]/g;
-  let m;
-  while ((m = rx.exec(s || "")) !== null) {
-    out.push({ t: m[0].toLowerCase(), start: m.index, end: m.index + m[0].length - 1 });
-  }
-  return out;
+function isWordChar_(ch) {
+  return /[A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9]/.test(ch);
+}
+
+function stripLeadingIndent_(s) {
+  const str = String(s || "");
+  const m = str.match(/^[\s\u00A0]*/);
+  const indentLen = m ? m[0].length : 0;
+  return { indentLen, content: str.slice(indentLen) };
+}
+
+function isEqualExceptLeadingIndent_(a, b) {
+  const A = stripLeadingIndent_(a).content;
+  const B = stripLeadingIndent_(b).content;
+  return A === B;
 }
 
 /**

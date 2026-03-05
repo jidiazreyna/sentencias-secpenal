@@ -369,7 +369,7 @@
         google.script.run
         .withSuccessHandler(res => {
           const compareLink = res.comparisonDocUrl
-            ? `<p><a href="${res.comparisonDocUrl}" target="_blank">Comparación visual (Google Docs)</a></p>`
+            ? `<p><a href="${res.comparisonDocUrl}" target="_blank">Reporte de errores (Google Docs)</a></p>`
             : "";
 
           document.getElementById("out").innerHTML = `

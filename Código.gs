@@ -2814,51 +2814,20 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
   // colores: eliminaciones/reemplazos (rojo claro)
   const RED = "#ffd6d6";
 
-  const normTok = (w) => (w || "")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  // ⚠️ Comparar solo palabras/números (no puntuación) para no “pintar todo rojo"
-  // por cambios menores de signos o espacios.
-  const A = tokenizeWords_(originalStr)
-    .filter(t => /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]/.test(t.w))
-    .map(t => ({ ...t, nw: normTok(t.w) }))
-    .filter(t => t.nw.length > 0);
-
-  const B = tokenizeWords_(correctedStr)
-    .filter(t => /[A-Za-zÁÉÍÓÚÑáéíóúñ0-9]/.test(t.w))
-    .map(t => ({ ...t, nw: normTok(t.w) }))
-    .filter(t => t.nw.length > 0);
-
-  if (!A.length || !B.length) return 0;
-
-  const ops = myersDiff_(A.map(x => x.nw), B.map(x => x.nw));
-
-  // Si el bloque cambió demasiado, evitamos un “manchón rojo” poco útil,
-  // pero dejamos un umbral alto para no perder resaltado de cambios reales.
-  let deletedWords = 0;
-  for (const op of ops) {
-    if (op.type === "delete") deletedWords += (op.a1 - op.a0);
-  }
-  if ((deletedWords / Math.max(1, A.length)) > 0.9) return 0;
-
-  // resaltar deletes en el original
+  const ranges = diffChangedRangesInOriginal_(originalStr || "", correctedStr || "");
   let marks = 0;
 
-  for (const op of ops) {
-    if (op.type !== "delete") continue;
-    const startTok = A[op.a0];
-    const endTok = A[op.a1 - 1];
-    if (!startTok || !endTok) continue;
-
-    const span = originalStr.slice(startTok.s, endTok.e);
-    if (!span.trim()) continue;
-
+  for (const r of ranges) {
     try {
-      textEl.setBackgroundColor(startTok.s, endTok.e - 1, RED);
+      textEl.setBackgroundColor(r.start, r.end, RED);
       marks++;
     } catch (e) {}
+  }
+
+  // Fallback: si el texto cambió pero no hubo rangos concretos (casos límite de tokenización),
+  // marcamos el bloque completo para no perder cambios en el comparativo.
+  if (!marks && normForMatch_(originalStr) !== normForMatch_(correctedStr)) {
+    marks += markWholeTextAsChanged_(textEl, originalStr || "");
   }
 
   return marks;

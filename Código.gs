@@ -201,55 +201,107 @@ function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   const right = collectEditableTextElements_(bodyCorrected);
   const out = [];
 
-  let j = 0;
-  const LOOKAHEAD = 25;
-  const MIN_SIMILARITY = 0.45;
+  // En documentos con encabezados repetidos (p.ej. "... dijo:"),
+  // un matching greedy puede desalinearse y generar resaltados falsos.
+  // Usamos alineación global (DP) para conservar el orden y minimizar corrimientos.
+  const leftNorm = left.map((el) => normForMatch_(el.getText() || ""));
+  const rightNorm = right.map((el) => normForMatch_(el.getText() || ""));
 
-  for (let i = 0; i < left.length; i++) {
-    if (j >= right.length) break;
+  const n = left.length;
+  const m = right.length;
 
-    const aText = left[i].getText() || "";
-    const aNorm = normForMatch_(aText);
-    if (!aNorm) continue;
+  if (!n || !m) return out;
 
-    // Anclas para secciones repetitivas: evita corrimientos cerca del cierre.
-    // Si se desalinea una cabecera estructural, los párrafos siguientes quedan
-    // sobre-resaltados aunque el texto sea correcto.
-    const forced = findAnchoredMatchIndex_(aNorm, right, j);
-    if (forced !== -1) {
-      out.push({ left: left[i], right: right[forced] });
-      j = forced + 1;
+  const MATCH_MULT = 2;
+  const GAP_PENALTY = -0.35;
+  const MIN_SIMILARITY = 0.5;
+
+  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(-Infinity));
+  const bt = Array.from({ length: n + 1 }, () => Array(m + 1).fill(null));
+
+  dp[0][0] = 0;
+  for (let i = 1; i <= n; i++) {
+    dp[i][0] = dp[i - 1][0] + GAP_PENALTY;
+    bt[i][0] = "up";
+  }
+  for (let j = 1; j <= m; j++) {
+    dp[0][j] = dp[0][j - 1] + GAP_PENALTY;
+    bt[0][j] = "left";
+  }
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const aNorm = leftNorm[i - 1];
+      const bNorm = rightNorm[j - 1];
+
+      let sim = 0;
+      if (aNorm && bNorm) {
+        sim = (aNorm === bNorm) ? 1 : diceCoef_(aNorm, bNorm);
+      }
+
+      const diag = dp[i - 1][j - 1] + (sim * MATCH_MULT);
+      const up = dp[i - 1][j] + GAP_PENALTY;
+      const leftGap = dp[i][j - 1] + GAP_PENALTY;
+
+      if (diag >= up && diag >= leftGap) {
+        dp[i][j] = diag;
+        bt[i][j] = "diag";
+      } else if (up >= leftGap) {
+        dp[i][j] = up;
+        bt[i][j] = "up";
+      } else {
+        dp[i][j] = leftGap;
+        bt[i][j] = "left";
+      }
+    }
+  }
+
+  const pairsRev = [];
+  let i = n;
+  let j = m;
+
+  while (i > 0 || j > 0) {
+    const dir = bt[i][j];
+    if (dir === "diag") {
+      const li = i - 1;
+      const rj = j - 1;
+      const aNorm = leftNorm[li];
+      const bNorm = rightNorm[rj];
+      const sim = (aNorm && bNorm)
+        ? (aNorm === bNorm ? 1 : diceCoef_(aNorm, bNorm))
+        : 0;
+
+      if (sim >= MIN_SIMILARITY) {
+        pairsRev.push({ left: left[li], right: right[rj] });
+      }
+
+      i--;
+      j--;
       continue;
     }
 
-    let best = -1;
-    let bestScore = -1;
-    const lim = Math.min(right.length - 1, j + LOOKAHEAD);
-
-    for (let k = j; k <= lim; k++) {
-      const bNorm = normForMatch_(right[k].getText() || "");
-      if (!bNorm) continue;
-
-      if (aNorm === bNorm) {
-        best = k;
-        bestScore = 1;
-        break;
-      }
-
-      const score = diceCoef_(aNorm, bNorm);
-      if (score > bestScore) {
-        bestScore = score;
-        best = k;
-      }
+    if (dir === "up") {
+      i--;
+      continue;
     }
 
-    // Evita desalinear todo el resto del documento por un match malo.
-    if (best === -1 || bestScore < MIN_SIMILARITY) continue;
+    if (dir === "left") {
+      j--;
+      continue;
+    }
 
-    out.push({ left: left[i], right: right[best] });
-    j = best + 1;
+    // fallback de seguridad
+    if (i > 0 && j > 0) {
+      i--;
+      j--;
+    } else if (i > 0) {
+      i--;
+    } else {
+      j--;
+    }
   }
 
+  pairsRev.reverse().forEach((pair) => out.push(pair));
   return out;
 }
 

@@ -167,36 +167,16 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
   for (const pair of pairs) {
     const leftText = pair.left;
     const rightText = pair.right;
-    if (!leftText) continue;
+    if (!leftText || !rightText) continue;
 
     const sA = leftText.getText() || "";
-    if (!sA) continue;
-
-    // Si no hubo match razonable en el documento corregido, resaltar párrafo completo.
-    if (!rightText) {
-      touched += markWholeTextAsChanged_(leftText, sA);
-      continue;
-    }
-
     const sB = rightText.getText() || "";
-    if (!sB) {
-      touched += markWholeTextAsChanged_(leftText, sA);
-      continue;
-    }
 
-    // Para comparación visual conviene detectar cambios exactos de texto
-    // (incluye mayúsculas, tildes, signos y abreviaturas), no solo por
-    // normalización “semántica”. Si no, se pierden muchos resaltados.
-    if (canonicalTextForComparison_(sA) === canonicalTextForComparison_(sB)) continue;
+    if (!sA || !sB) continue;
+    if (normForMatch_(sA) === normForMatch_(sB)) continue;
 
     try {
-      // Si el emparejamiento fue débil y no hay solapamiento real, resaltar completo.
-      // Si hay solapamiento, intentamos diff para evitar “todo el párrafo en rojo”.
-      if ((pair.score || 0) < 0.22 && !hasReasonableWordOverlap_(sA, sB)) {
-        touched += markWholeTextAsChanged_(leftText, sA);
-      } else {
-        touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
-      }
+      touched += highlightDeletionsAndReplacements_(leftText, sA, sB);
     } catch (e) {
       // continuar: la comparación es complementaria y no debe frenar el flujo principal.
     }
@@ -219,92 +199,39 @@ function buildComparisonDoc_(baseDocId, correctedDocId, outFolder, outName, log)
 function pairTextElementsForComparison_(bodyCompare, bodyCorrected) {
   const left = collectEditableTextElements_(bodyCompare);
   const right = collectEditableTextElements_(bodyCorrected);
-
-  const n = left.length;
-  const m = right.length;
   const out = [];
 
-  if (!n) return out;
-
-  const leftNorm = left.map((te) => normForMatch_(te.getText() || ""));
-  const rightNorm = right.map((te) => normForMatch_(te.getText() || ""));
-
-  const GAP_LEFT = -0.28;   // párrafo de base sin match (tender a evitarlo)
-  const GAP_RIGHT = -0.08;  // párrafo extra en corregido (más tolerante)
-  const MIN_MATCH_SCORE = 0.30;
-
-  // DP de alineación global (Needleman-Wunsch simplificado)
-  const dp = Array.from({ length: n + 1 }, () => Array(m + 1).fill(0));
-
-  for (let i = n - 1; i >= 0; i--) dp[i][m] = dp[i + 1][m] + GAP_LEFT;
-  for (let j = m - 1; j >= 0; j--) dp[n][j] = dp[n][j + 1] + GAP_RIGHT;
-
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      const aNorm = leftNorm[i];
-      const bNorm = rightNorm[j];
-
-      let matchScore = -1e9;
-      if (aNorm && bNorm) {
-        const dice = diceCoef_(aNorm, bNorm);
-        const overlap = hasReasonableWordOverlap_(left[i].getText() || "", right[j].getText() || "");
-        if (dice >= MIN_MATCH_SCORE || overlap) {
-          // Recompensa por match. Damos un pequeño plus al overlap para párrafos largos.
-          matchScore = dp[i + 1][j + 1] + (dice * 2) + (overlap ? 0.12 : 0);
-        }
-      }
-
-      const skipLeft = dp[i + 1][j] + GAP_LEFT;
-      const skipRight = dp[i][j + 1] + GAP_RIGHT;
-
-      dp[i][j] = Math.max(matchScore, skipLeft, skipRight);
-    }
-  }
-
-  // Reconstrucción de la mejor alineación
   let i = 0;
   let j = 0;
-  while (i < n && j < m) {
-    const aNorm = leftNorm[i];
-    const bNorm = rightNorm[j];
+  const LOOKAHEAD = 4;
 
-    let canMatch = false;
-    let dice = 0;
-    let overlap = false;
-    let matchVal = -1e9;
+  for (; i < left.length; i++) {
+    if (j >= right.length) break;
 
-    if (aNorm && bNorm) {
-      dice = diceCoef_(aNorm, bNorm);
-      overlap = hasReasonableWordOverlap_(left[i].getText() || "", right[j].getText() || "");
-      canMatch = (dice >= MIN_MATCH_SCORE || overlap);
-      if (canMatch) {
-        matchVal = dp[i + 1][j + 1] + (dice * 2) + (overlap ? 0.12 : 0);
+    const aText = left[i].getText() || "";
+    const aNorm = normForMatch_(aText);
+
+    let best = j;
+    let bestScore = -1;
+    const lim = Math.min(right.length - 1, j + LOOKAHEAD);
+
+    for (let k = j; k <= lim; k++) {
+      const bNorm = normForMatch_(right[k].getText() || "");
+      if (!bNorm) continue;
+      if (aNorm === bNorm) {
+        best = k;
+        bestScore = 1;
+        break;
+      }
+      const score = diceCoef_(aNorm, bNorm);
+      if (score > bestScore) {
+        bestScore = score;
+        best = k;
       }
     }
 
-    const skipLeft = dp[i + 1][j] + GAP_LEFT;
-    const skipRight = dp[i][j + 1] + GAP_RIGHT;
-    const best = dp[i][j];
-
-    if (canMatch && Math.abs(best - matchVal) <= 1e-9) {
-      out.push({ left: left[i], right: right[j], score: dice });
-      i++;
-      j++;
-      continue;
-    }
-
-    if (Math.abs(best - skipRight) <= 1e-9) {
-      j++;
-      continue;
-    }
-
-    out.push({ left: left[i], right: null, score: 0 });
-    i++;
-  }
-
-  while (i < n) {
-    out.push({ left: left[i], right: null, score: 0 });
-    i++;
+    out.push({ left: left[i], right: right[best] });
+    j = best + 1;
   }
 
   return out;
@@ -2836,18 +2763,6 @@ function collectFromElement_(el, out) {
   // otros: ignorar
 }
 
-
-function markWholeTextAsChanged_(textEl, s) {
-  const RED = "#ffd6d6";
-  if (!s || !s.trim()) return 0;
-  try {
-    textEl.setBackgroundColor(0, s.length - 1, RED);
-    return 1;
-  } catch (e) {
-    return 0;
-  }
-}
-
 function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
   // colores: eliminaciones/reemplazos (rojo claro)
   const RED = "#ffd6d6";
@@ -2860,12 +2775,6 @@ function highlightDeletionsAndReplacements_(textEl, originalStr, correctedStr) {
       textEl.setBackgroundColor(r.start, r.end, RED);
       marks++;
     } catch (e) {}
-  }
-
-  // Fallback: si el texto cambió pero no hubo rangos concretos (casos límite de tokenización),
-  // marcamos el bloque completo para no perder cambios en el comparativo.
-  if (!marks && canonicalTextForComparison_(originalStr) !== canonicalTextForComparison_(correctedStr)) {
-    marks += markWholeTextAsChanged_(textEl, originalStr || "");
   }
 
   return marks;
@@ -2893,30 +2802,6 @@ function normForMatch_(s) {
     .replace(/\s+/g, " ")
     .replace(/[“”«»"']/g, "")
     .trim();
-}
-
-function canonicalTextForComparison_(s) {
-  return (s || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function hasReasonableWordOverlap_(a, b) {
-  const ta = (normForMatch_(a).match(/[a-z0-9]+/g) || []).filter(x => x.length > 2);
-  const tb = (normForMatch_(b).match(/[a-z0-9]+/g) || []).filter(x => x.length > 2);
-  if (!ta.length || !tb.length) return false;
-
-  const setB = Object.create(null);
-  for (const w of tb) setB[w] = true;
-
-  let common = 0;
-  for (const w of ta) {
-    if (setB[w]) common++;
-  }
-
-  const minLen = Math.min(ta.length, tb.length);
-  return common >= 3 || (common / minLen) >= 0.35;
 }
 
 function bigrams_(s) {

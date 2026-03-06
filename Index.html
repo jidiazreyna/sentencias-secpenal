@@ -308,11 +308,11 @@
           <div class="header">
             <div>
               <h1 class="title">Corrector de Sentencias</h1>
-              <div class="subtitle">Seleccioná un DOCX de Entrada, definí presidencia y el orden de votos.</div>
+              <div class="subtitle">Seleccioná un DOC o DOCX de Entrada, definí presidencia y el orden de votos.</div>
             </div>
             <div class="pill" aria-hidden="true" title="Drive + validación de selección">
               <span class="dot"></span>
-              DOCX · Drive
+              DOC/DOCX · Drive
             </div>
           </div>
 
@@ -320,15 +320,15 @@
             <div class="field">
               <div class="label">
                 <span>Archivo de Entrada</span>
-                <span class="meta">Solo DOCX</span>
+                <span class="meta">Solo DOC o DOCX</span>
               </div>
 
               <div class="rowStack">
                 <button class="btnSecondary" type="button" onclick="loadFiles()">Cargar archivos</button>
-                <select id="fileSelect" aria-label="Archivo DOCX de entrada"></select>
+                <select id="fileSelect" aria-label="Archivo DOC/DOCX de entrada"></select>
               </div>
 
-              <div class="hint">Se muestran solo DOCX (no Google Docs, no PDFs).</div>
+              <div class="hint">Se muestran solo DOC y DOCX (no Google Docs, no PDFs).</div>
             </div>
 
             <div class="field">
@@ -465,7 +465,7 @@
             if (!files || files.length === 0) {
               const opt = document.createElement("option");
               opt.value = "";
-              opt.textContent = "(No hay DOCX en Entrada)";
+              opt.textContent = "(No hay DOC/DOCX en Entrada)";
               sel.appendChild(opt);
               return;
             }
@@ -486,7 +486,7 @@
       function run() {
         const fileId = document.getElementById("fileSelect").value;
         if (!fileId) {
-          setOut(`<p class="errorText">No hay archivo DOCX seleccionado.</p>`);
+          setOut(`<p class="errorText">No hay archivo DOC/DOCX seleccionado.</p>`);
           return;
         }
 

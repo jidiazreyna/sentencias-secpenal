@@ -12,7 +12,9 @@ const VOCALES = [
 ];
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOC_MIME = "application/msword";
 const GDOC_MIME = "application/vnd.google-apps.document";
+const INPUT_WORD_MIMES = [DOCX_MIME, DOC_MIME];
 
 // ====== GÉNERO (para “el señor/la señora Vocal …”) ======
 const VOCALES_GENERO = {
@@ -36,7 +38,7 @@ function listInputFiles() {
   const out = [];
   while (files.hasNext()) {
     const f = files.next();
-    if (f.getMimeType() === DOCX_MIME) {
+    if (INPUT_WORD_MIMES.indexOf(f.getMimeType()) !== -1) {
       out.push({ id: f.getId(), name: f.getName(), mime: f.getMimeType() });
     }
   }
@@ -82,12 +84,14 @@ function correctDocx(fileId, settings) {
   const outFolder = DriveApp.getFolderById(FOLDER_OUT_ID);
 
   const meta = Drive.Files.get(fileId);
-  if (meta.mimeType !== DOCX_MIME) {
-    throw new Error("Drive API detecta que NO es DOCX. MIME: " + meta.mimeType);
+  if (INPUT_WORD_MIMES.indexOf(meta.mimeType) === -1) {
+    throw new Error("Drive API detecta que NO es DOC/DOCX. MIME: " + meta.mimeType);
   }
 
   const changeLog = [];
-  changeLog.push(makeChange_("DEBUG_STEP", "Inicio", "", "1) Validado DOCX por Drive API", {}));
+  changeLog.push(makeChange_("DEBUG_STEP", "Inicio", "", "1) Validado DOC/DOCX por Drive API", {
+    inputMime: meta.mimeType
+  }));
 
   // Convertir DOCX -> Google Doc (base)
   const baseGDoc = convertDocxToGoogleDoc_(

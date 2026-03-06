@@ -672,7 +672,7 @@ function normalizeMinisterioPublico_(doc) {
   const reDef = /\bministerio\s+p[uú]blico\s+de\s+la\s+defensa\b/ig;
   const reMPF = /\bministerio\s+p[uú]blico\s+fiscal\b/ig;
   const reMPFF = /\bministerio\s+p[uú]blico\s+fiscal\s+fiscal\b/ig;
-  const reMP  = /\bministerio\s+p[uú]blico\b/ig;
+  const reMP  = /\bministerio\s+p[uú]blico\b(?!\s+(?:fiscal|de\s+la\s+defensa)\b)/ig;
 
   forEachText_(body, (textEl) => {
     // 1) Defensa primero (así no termina convertido a Fiscal)
@@ -683,13 +683,8 @@ function normalizeMinisterioPublico_(doc) {
     // FIX #13: evita duplicación "Fiscal Fiscal".
     touched += replaceInTextPreserveStyle_(textEl, reMPFF, "Ministerio Público Fiscal");
 
-    // 3) “Ministerio Público” suelto -> Fiscal, salvo que en el texto inmediato diga “de la Defensa”
-    touched += replaceInTextPreserveStyle_(textEl, reMP, (m, full) => {
-      const idx = m.index;
-      const tail = (full || "").slice(idx, idx + 60).toLowerCase();
-      if (/\bministerio\s+p[uú]blico\s+de\s+la\s+defensa\b/i.test(tail)) return m[0]; // dejar
-      return "Ministerio Público Fiscal";
-    });
+    // 3) “Ministerio Público” suelto -> Fiscal (si ya dice Fiscal/Defensa, no tocar)
+    touched += replaceInTextPreserveStyle_(textEl, reMP, "Ministerio Público Fiscal");
   });
 
   return touched;

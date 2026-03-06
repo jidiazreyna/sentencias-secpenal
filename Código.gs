@@ -595,7 +595,7 @@ function italicizeLatinisms_(doc) {
 
   // FIX #2 y #3: latinismos/locuciones en cursiva preservando formato existente.
   const terms = [
-    "v\\.\\s*gr\\.", "in\\s+re", "in\\s+dubio\\s+pro\\s+reo", "bis", "ter", "quater", "quinquies", "sexies", "septies", "octies", "novies", "nonies", "decies",
+    "v\\.\\s*gr\\.", "in\\s+re", "in\\s+dubio\\s+pro\\s+reo", "in\\s+dubio", "bis", "ter", "quater", "quinquies", "sexies", "septies", "octies", "novies", "nonies", "decies",
     "a\\s+quo", "ad\\s+quem", "onus\\s+probandi", "res\\s+iudicata", "habeas\\s+corpus", "ex\\s+lege", "dura\\s+lex", "sed\\s+lex",
     "non\\s+bis\\s+in\\s+idem", "ad\\s+effectum\\s+videndi", "sine\\s+qua\\s+non", "prima\\s+facie", "ut\\s+supra", "supra", "modus\\s+operandi", "animus\\s+domini", "animus", "ad\\s+hoc"
   ];

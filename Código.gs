@@ -1180,6 +1180,10 @@ function applyTextFont12Times_(textEl, options) {
   const len = (textEl.getText() || "").length;
   if (len <= 0) return;
 
+  // Forzar texto plano sin colores ni resaltados heredados.
+  textEl.setForegroundColor(0, len - 1, "#000000");
+  textEl.setBackgroundColor(0, len - 1, null);
+
   // Por defecto NO tocamos negrita/cursiva/subrayado para preservar formato del DOCX.
   if (clearInlineStyles) {
     textEl.setBold(0, len - 1, false);

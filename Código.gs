@@ -1869,8 +1869,8 @@ function applyVotersInSections_(doc, settings, log) {
   const voteLineRegexPlaceholder =
     /^(?:El\s*\/\s*La|La\s*\/\s*El)\s+(?:señor|senor)\s*\/\s*a\s+vocal\s+doctor\s*\/\s*a\b[\s\S]*?(?:,\s*)?dijo\s*:\s*$/i;
   // FIX #1: placeholders con puntos/guiones/espacios: "........ dijo:" / "— dijo:"
-  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃·…\s]{2,})\s*dijo\s*:\s*$/i;
-  const voteLineRegexDijoOnly = /^\s*dijo\s*:\s*$/i;
+  const voteLineRegexDotsPlaceholder = /^\s*(?:[\.•\-–—_\|¦│┃·…\s]{2,})(?:,\s*)?dijo\s*:\s*$/i;
+  const voteLineRegexDijoOnly = /^\s*(?:,\s*)?dijo\s*:\s*$/i;
 
   const sectionRegex = /^A\s+LA\s+(PRIMERA|SEGUNDA|TERCERA)\s+CUESTI[ÓO]N/i;
 

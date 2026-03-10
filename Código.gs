@@ -3305,21 +3305,6 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
     return;
   }
 
-  // límite: hasta antes del próximo heading de sección (A LA SEGUNDA/TERCERA CUESTIÓN)
-  let sectionEndIndex = n;
-  for (let i = targetIndex + 1; i < n; i++) {
-    const el = body.getChild(i);
-    if (el.getType() !== DocumentApp.ElementType.PARAGRAPH &&
-        el.getType() !== DocumentApp.ElementType.LIST_ITEM) continue;
-
-    const p = elementToParagraphOrListItem_(el);
-    const t = (p.getText() || "").trim();
-    if (rxSeccion.test(t)) {
-      sectionEndIndex = i;
-      break;
-    }
-  }
-
   const before = targetP.getText() || "";
   let after = canonicalizeFirstQuestionIText_(before);
 
@@ -3333,7 +3318,7 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
       tAll.setItalic(0, allLen - 1, false);
       tAll.setUnderline(0, allLen - 1, false);
     }
-    const q = italicizeQuotedTextNoBoldAcrossRange_(body, targetIndex, sectionEndIndex);
+    const q = italicizeQuotedTextNoBold_(targetP);
     boldRomanNumeralIPrefix_(targetP);
 
 
@@ -3366,61 +3351,10 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
   }
 
   // 6) Comillas: todo lo entre comillas -> cursiva y sin negrita
-  const qCount = italicizeQuotedTextNoBoldAcrossRange_(body, targetIndex, sectionEndIndex);
+  const qCount = italicizeQuotedTextNoBold_(targetP);
   boldRomanNumeralIPrefix_(targetP);
 
 
-}
-
-function italicizeQuotedTextNoBoldAcrossRange_(body, startIndex, endIndexExclusive) {
-  let inQuote = false;
-  let count = 0;
-
-  const isQuote = (ch) => /["“”«»]/.test(ch);
-
-  for (let i = startIndex; i < endIndexExclusive; i++) {
-    const el = body.getChild(i);
-    if (el.getType() !== DocumentApp.ElementType.PARAGRAPH &&
-        el.getType() !== DocumentApp.ElementType.LIST_ITEM) continue;
-
-    const p = elementToParagraphOrListItem_(el);
-    const t = p.editAsText();
-    const s = p.getText() || "";
-    if (!s) continue;
-
-    let segStart = inQuote ? 0 : -1;
-
-    for (let j = 0; j < s.length; j++) {
-      if (!isQuote(s[j])) continue;
-
-      if (!inQuote) {
-        inQuote = true;
-        segStart = j + 1;
-      } else {
-        const segEnd = j - 1;
-        if (segStart !== -1 && segEnd >= segStart) {
-          try {
-            t.setItalic(segStart, segEnd, true);
-            t.setBold(segStart, segEnd, false);
-          } catch (e) {}
-          count++;
-        }
-        inQuote = false;
-        segStart = -1;
-      }
-    }
-
-    // Si la cita continúa en el siguiente párrafo, marcamos hasta el final de éste.
-    if (inQuote && segStart !== -1 && segStart < s.length) {
-      try {
-        t.setItalic(segStart, s.length - 1, true);
-        t.setBold(segStart, s.length - 1, false);
-      } catch (e) {}
-      count++;
-    }
-  }
-
-  return count;
 }
 
 function canonicalizeFirstQuestionIText_(txt) {

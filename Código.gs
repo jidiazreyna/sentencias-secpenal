@@ -3310,6 +3310,7 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
   }
 
   const before = targetP.getText() || "";
+  const hadItalicBefore = paragraphHasAnyItalic_(targetP);
   let after = canonicalizeFirstQuestionIText_(before);
 
   // nada para hacer
@@ -3319,10 +3320,11 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
     if (allLen > 0) {
       const tAll = targetP.editAsText();
       tAll.setBold(0, allLen - 1, false);
-      tAll.setItalic(0, allLen - 1, false);
+      // Si el DOCX original ya traía cursivas, NO las limpiamos.
+      if (!hadItalicBefore) tAll.setItalic(0, allLen - 1, false);
       tAll.setUnderline(0, allLen - 1, false);
     }
-    const q = italicizeQuotedTextNoBold_(targetP);
+    const q = hadItalicBefore ? 0 : italicizeQuotedTextNoBold_(targetP);
     boldRomanNumeralIPrefix_(targetP);
 
 
@@ -3350,15 +3352,31 @@ function fixFirstQuestionIntroSentenciaI_(doc, log) {
   if (allLen > 0) {
     const tAll = targetP.editAsText();
     tAll.setBold(0, allLen - 1, false);
-    tAll.setItalic(0, allLen - 1, false);
+    // Si venía con cursiva, la conservamos (evita cortar citas por comillas internas).
+    if (hadItalicBefore) {
+      tAll.setItalic(0, allLen - 1, true);
+    } else {
+      tAll.setItalic(0, allLen - 1, false);
+    }
     tAll.setUnderline(0, allLen - 1, false);
   }
 
   // 6) Comillas: todo lo entre comillas -> cursiva y sin negrita
-  const qCount = italicizeQuotedTextNoBold_(targetP);
+  const qCount = hadItalicBefore ? 0 : italicizeQuotedTextNoBold_(targetP);
   boldRomanNumeralIPrefix_(targetP);
 
 
+}
+
+function paragraphHasAnyItalic_(paragraph) {
+  try {
+    const t = paragraph.editAsText();
+    const s = t.getText() || "";
+    for (let i = 0; i < s.length; i++) {
+      if (t.isItalic(i)) return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 function canonicalizeFirstQuestionIText_(txt) {
